@@ -1,0 +1,7 @@
+@import "tailwindcss";
+
+:root {
+    background-image: url('assets/seamless-table-cover.png');
+    background-repeat: repeat;
+    background-size: cover;
+}
