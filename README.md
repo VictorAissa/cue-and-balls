@@ -1,309 +1,199 @@
-# Exercice K8s — Architecture 2-tier (Frontend + Backend)
+# Pool - Cluster Setup
 
-> **Date :** 21/05/2026  
-> **IP du nœud :** `10.108.143.255`  
-> **Accès DNS :** `<nom>.10.108.143.255.nip.io`
+## Prerequisites
+
+The following tools must be installed on your machine.
+
+### kubectl
+
+```bash
+# Pacman
+sudo pacman -S kubectl
+```
+
+```bash
+# Verify
+kubectl version --client
+```
+
+### Minikube
+
+```bash
+# Pacman
+sudo pacman -S minikube
+```
+
+```bash
+# Verify
+minikube version
+```
+
+### Helm
+
+```bash
+# Pacman
+sudo pacman -S helm
+```
+
+```bash
+# Verify
+helm version
+```
 
 ---
 
-## Objectif
+## Build images
 
-Déployer une architecture 2 couches dans Kubernetes et l'exposer via des URLs DNS lisibles grâce à **nip.io** — sans configuration DNS, l'IP est encodée directement dans le nom de domaine.
+### Backend
 
-Le routage externe est assuré par la **Gateway API** (objets `Gateway` + `HTTPRoute`), implémentée ici par **Traefik**.
+```bash
+cd backend
+docker build -t pool-backend:1.0.0 .
+cd ..
+```
 
-| Tier     | URL cible                              |
-|----------|----------------------------------------|
-| Frontend | `http://web.10.108.143.255.nip.io`   |
-| Backend  | `http://api.10.108.143.255.nip.io`     |
+### Frontend
+
+`VITE_API_URL` is resolved at runtime via nginx proxy to the backend service - no IP required at build time.
+
+```bash
+cd frontend
+docker build -t pool-frontend:1.0.0 .
+cd ..
+```
+
+### Load images into Minikube
+
+```bash
+minikube image load pool-backend:1.0.0
+minikube image load pool-frontend:1.0.0
+```
+
+### Verify images are available in Minikube
+
+```bash
+minikube image ls | grep pool
+```
+
+Expected : `docker.io/library/pool-backend:1.0.0` and `docker.io/library/pool-frontend:1.0.0`.
+
+> When releasing a new version, bump the image tag, rebuild, reload into Minikube,
+> and update the `image:` field in the corresponding `deployment.yaml` before re-applying manifests.
 
 ---
 
-## Prérequis
-
-Vérifiez que les CRDs Gateway API sont bien installés sur le cluster :
+## Start the cluster
 
 ```bash
-kubectl get crd gateways.gateway.networking.k8s.io httproutes.gateway.networking.k8s.io
+minikube start
 ```
 
-Si les CRDs sont absents, installez-les :
+Enable the tunnel to expose LoadBalancer services (run in a dedicated terminal, keep it open) :
 
 ```bash
-kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/latest/download/standard-install.yaml
+minikube tunnel
 ```
 
-Vérifiez également que Traefik est déployé et qu'une `GatewayClass` nommée `traefik` existe :
+---
+
+## Deploy Traefik
+
+Add the Helm chart repository (once) :
+
+```bash
+helm repo add traefik https://traefik.github.io/charts
+helm repo update
+```
+
+Install Traefik :
+
+```bash
+helm install traefik traefik/traefik \
+  --namespace traefik \
+  --create-namespace \
+  -f cluster/k8s/traefik/values.yaml
+```
+
+Verify the GatewayClass is ready :
 
 ```bash
 kubectl get gatewayclass
 ```
 
-Vous pouvez vous référer au start-minikube.md pour déployer traefik.
+Expected : a `traefik` GatewayClass with `ACCEPTED: True`.
 
 ---
 
+## Retrieve the Traefik external IP
 
-## Étape 0 — Namespace
-
-Tous les objets doivent être déployés dans un namespace dédié.
-
-```yaml
-# k8s/namespace.yaml
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: {votre-ns}
-```
+The external IP assigned to the Traefik LoadBalancer service is stable as long as the service exists,
+but must be retrieved once after installation to configure the HTTPRoutes.
 
 ```bash
-kubectl apply -f k8s/namespace.yaml
+kubectl get svc traefik -n traefik
+```
+
+Note the value in the `EXTERNAL-IP` column (e.g. `10.101.159.91`).
+
+Update the `hostnames` field in both HTTPRoute files with this IP :
+
+```
+backend/deploy/k8s/httproute.yaml  ->  api.<EXTERNAL-IP>.nip.io
+frontend/deploy/k8s/httproute.yaml ->  web.<EXTERNAL-IP>.nip.io
 ```
 
 ---
 
-## Étape 1 — Gateway
+## Deploy the application
 
-La `Gateway` est le point d'entrée unique du cluster. Elle écoute sur le port 80 et accepte les routes déclarées dans le namespace `{votre-ns}`.
-
-```yaml
-# k8s/gateway.yaml
-apiVersion: gateway.networking.k8s.io/v1
-kind: Gateway
-metadata:
-  name: tp-gateway
-  namespace: {votre-ns}
-spec:
-  gatewayClassName: traefik
-  listeners:
-    - name: http
-      protocol: HTTP
-      port: 80
-      allowedRoutes:
-        namespaces:
-          from: Same
-```
+Apply shared cluster resources (namespace + gateway) :
 
 ```bash
-kubectl apply -f k8s/gateway.yaml
-
-# Vérifier que la Gateway est Ready
-kubectl get gateway -n {votre-ns}
+kubectl apply -f cluster/k8s/pool/ -R
 ```
 
----
-
-## Étape 2 — Backend (API)
-
-### Deployment
-
-Le backend expose **au minimum un endpoint** :
-- `GET /api/health` → `{"status": "ok"}`
-
-Vous pouvez utiliser n'importe quel langage/framework (Node.js/Express, Python/FastAPI, Go…).
-
-```yaml
-# k8s/backend/deployment.yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: backend
-  namespace: {votre-ns}
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: backend
-  template:
-    metadata:
-      labels:
-        app: backend
-    spec:
-      containers:
-        - name: backend
-          image: <votre-image>   # ex: monrepo/api:latest
-          ports:
-            - containerPort: 3000
-          env:
-            - name: PORT
-              value: "3000"
-```
-
-### Service
-
-Un `ClusterIP` suffit — la Gateway se chargera de l'exposition externe.
-
-```yaml
-# k8s/backend/service.yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: backend
-  namespace: {votre-ns}
-spec:
-  selector:
-    app: backend
-  ports:
-    - port: 80
-      targetPort: 3000
-```
-
-### HTTPRoute
-
-L'`HTTPRoute` rattache ce service à la Gateway en filtrant sur le hostname `api.10.108.143.255.nip.io`.
-
-```yaml
-# k8s/backend/httproute.yaml
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: backend-route
-  namespace: {votre-ns}
-spec:
-  parentRefs:
-    - name: tp-gateway
-  hostnames:
-    - "api.10.108.143.255.nip.io"
-  rules:
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /
-      backendRefs:
-        - name: backend
-          port: 80
-```
-
----
-
-## Étape 3 — Frontend
-
-### Deployment
-
-Le frontend doit consommer l'API backend. La variable `VITE_API_URL` (ou équivalent selon votre framework) doit pointer vers l'URL publique de l'API.
-
-```yaml
-# k8s/frontend/deployment.yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: frontend
-  namespace: {votre-ns}
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: frontend
-  template:
-    metadata:
-      labels:
-        app: frontend
-    spec:
-      containers:
-        - name: frontend
-          image: <votre-image>   # ex: monrepo/front:latest
-          ports:
-            - containerPort: 80
-          env:
-            - name: VITE_API_URL
-              value: "http://api.10.108.143.255.nip.io"
-```
-
-### Service
-
-```yaml
-# k8s/frontend/service.yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: frontend
-  namespace: {votre-ns}
-spec:
-  selector:
-    app: frontend
-  ports:
-    - port: 80
-      targetPort: 80
-```
-
-### HTTPRoute
-
-```yaml
-# k8s/frontend/httproute.yaml
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: frontend-route
-  namespace: {votre-ns}
-spec:
-  parentRefs:
-    - name: tp-gateway
-  hostnames:
-    - "web.10.108.143.255.nip.io"
-  rules:
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /
-      backendRefs:
-        - name: frontend
-          port: 80
-```
-
----
-
-## Déploiement complet
+Apply backend and frontend manifests :
 
 ```bash
-# Appliquer tous les manifestes
-kubectl apply -f k8s/
-
-# Vérifier que les pods sont Running
-kubectl get pods -n {votre-ns}
-
-# Vérifier les services
-kubectl get svc -n {votre-ns}
-
-# Vérifier la Gateway et les HTTPRoutes
-kubectl get gateway,httproute -n {votre-ns}
+kubectl apply -f backend/deploy/k8s/ -R
+kubectl apply -f frontend/deploy/k8s/ -R
 ```
-
-L'état `Accepted` et `Programmed` sur la Gateway indique que Traefik a bien pris en compte la configuration.
 
 ---
 
-## Validation
+## Verify
 
 ```bash
-# 1. Backend : health check
-curl http://api.10.108.143.255.nip.io/api/health
-# Attendu : {"status":"ok"}
+# All pods running
+kubectl get pods -n pool
 
-# 2. Frontend : page HTML
-curl -I http://web.10.108.143.255.nip.io
-# Attendu : HTTP/1.1 200 OK
+# Gateway and routes accepted
+kubectl get gateway,httproute -n pool
 ```
 
-Ouvrez `http://web.10.108.143.255.nip.io` dans un navigateur et vérifiez que le frontend affiche des données provenant de l'API.
+Expected : Gateway `Programmed: True`, both HTTPRoutes `Accepted: True`.
+
+```bash
+curl http://api.<EXTERNAL-IP>.nip.io/api/health
+# Expected : {"status":"ok"}
+
+curl -I http://web.<EXTERNAL-IP>.nip.io
+# Expected : HTTP/1.1 200 OK
+```
 
 ---
 
-## Critères de validation
+## Teardown
 
-- [ ] Les pods backend et frontend sont en état `Running`
-- [ ] La `Gateway` est en état `Programmed: True`
-- [ ] Les deux `HTTPRoute` sont en état `Accepted: True`
-- [ ] `curl .../api/health` répond `200` avec un body JSON
-- [ ] Le frontend s'affiche dans le navigateur
-- [ ] Le frontend appelle l'API (vérifiable via les DevTools réseau)
-- [ ] Toutes les ressources sont dans le namespace `{votre-ns}`
+```bash
+# Remove application manifests
+kubectl delete -f backend/deploy/k8s/ -R
+kubectl delete -f frontend/deploy/k8s/ -R
+kubectl delete -f cluster/k8s/pool/ -R
 
----
+# Remove Traefik
+helm uninstall traefik --namespace traefik
 
-## Bonus
-
-- Ajouter une `readinessProbe` et une `livenessProbe` sur le backend
-- Externaliser la config dans un `ConfigMap` (port, `VITE_API_URL`…)
-- Ajouter un second endpoint sur l'API (ex: `GET /api/items`) et l'afficher côté frontend
-- Tester la résilience : `kubectl delete pod <backend-pod>` et observer le redémarrage automatique
-- Ajouter un filtre de réécriture de chemin sur l'`HTTPRoute` backend (`/api` → `/`)
+# Stop cluster
+minikube stop
+```
