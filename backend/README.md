@@ -1,98 +1,102 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Cue&Balls
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
-
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
-
-## Description
-
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
-
-## Project setup
+## DB container
 
 ```bash
-$ npm install
+docker run -d \
+--name cueballs-postgres \
+-e POSTGRES_USER=admin \
+-e POSTGRES_PASSWORD=admin \
+-e POSTGRES_DB=main \
+-p 5432:5432 \
+-v cueballs-postgres-data:/var/lib/postgresql/data \
+postgres:16-alpine
 ```
 
-## Compile and run the project
+## Project Structure
 
-```bash
-# development
-$ npm run start
-
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
 ```
+src/
+├── auth/
+│   ├── dto/
+│   │   ├── register.dto.ts
+│   │   └── login.dto.ts
+│   ├── guards/
+│   │   └── jwt-auth.guard.ts
+│   ├── strategies/
+│   │   └── jwt.strategy.ts
+│   ├── auth.controller.ts
+│   │   # POST /auth/register, POST /auth/login
+│   ├── auth.service.ts
+│   │   # register: hash password + create Player
+│   │   # login: validate credentials + sign JWT
+│   └── auth.module.ts
+│
+├── players/
+│   ├── dto/
+│   │   └── update-player.dto.ts
+│   ├── players.controller.ts
+│   │   # GET /players/me, PATCH /players/me
+│   ├── players.service.ts
+│   │   # findMe: fetch authenticated player profile
+│   │   # updateMe: update username or avatar
+│   └── players.module.ts
+│
+├── games/
+│   ├── dto/
+│   │   ├── shoot.dto.ts
+│   │   └── shot-resolved.dto.ts
+│   ├── services/
+│   │   ├── games.service.ts
+│   │   │   # createGame: create Game + register caller as first GamePlayer
+│   │   │   # joinGame: register second GamePlayer + init 16 GameBalls + set ONGOING
+│   │   │   # listGames: fetch games filtered by status for lobby
+│   │   │   # getGame: fetch full game state (Game + GamePlayers + GameBalls) for reconnection
+│   │   │   # pauseGame: set PAUSED + persist
+│   │   │   # resumeGame: set ONGOING + persist
+│   │   │   # abandonGame: set ABANDONED + notify opponent via game_over
+│   │   ├── shot.service.ts
+│   │   │   # processShoot: validate turn ownership + forward opponent_shot to the other player
+│   │   │   # processShotResolved: orchestrate rules check + persist GameBalls state + emit shot_result to both + trigger game_over if needed
+│   │   └── game-rules.service.ts
+│   │       # isFoul: detect whether cue ball (number 0) was pocketed
+│   │       # resolveNextTurn: compute next turn player (same if legal pocket, opponent on miss or foul)
+│   │       # assignBallTypes: assign SOLIDS/STRIPES on first legal non-eight pocket after break
+│   │       # isGameOver: check win condition (eight pocketed after clearing own balls) or loss (eight pocketed too early)
+│   ├── games.controller.ts
+│   │   # POST /games
+│   │   # GET /games?status=
+│   │   # GET /games/:id
+│   │   # POST /games/:id/join
+│   ├── games.gateway.ts
+│   │   # handleConnection: decode JWT + find active game + join Socket.io room
+│   │   # handleDisconnect: emit player_left + start reconnection TTL timer
+│   │   # shoot: delegate to ShotService.processShoot
+│   │   # shot_resolved: delegate to ShotService.processShotResolved
+│   │   # pause_request: delegate to GamesService.pauseGame
+│   │   # resume_request: delegate to GamesService.resumeGame
+│   │   # leave_game: delegate to GamesService.abandonGame
+│   └── games.module.ts
+│
+├── prisma/
+│   ├── prisma.service.ts
+│   │   # extends PrismaClient
+│   │   # onModuleInit: open database connection
+│   │   # onModuleDestroy: close database connection
+│   └── prisma.module.ts
+│       # global module, exports PrismaService to all modules
+│
+├── adapters/
+│   └── redis-io.adapter.ts
+│       # extends IoAdapter
+│       # connectToRedis: establish Redis connection
+│       # createIOServer: attach @socket.io/redis-adapter for cross-pod WS event routing
+│
+└── app.module.ts
+    # root module, imports all feature modules
 
-## Run tests
-
-```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+prisma/
+├── schema.prisma
+└── seed.ts
+    # inserts the 16 static Ball rows (number, type, color)
 ```
-
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
-
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
-```
-
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
-
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
