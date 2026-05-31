@@ -1,102 +1,81 @@
-# Cue&Balls
+# Cue & Balls — Backend
 
-## DB container
+API REST + WebSocket pour un jeu de billard 8-ball multijoueur en ligne. NestJS 11 + Prisma 7 + PostgreSQL + Redis.
+
+---
+
+## Prérequis
+
+- Node.js 22+
+- Docker
+
+---
+
+## Installation
 
 ```bash
+yarn install
+```
+
+---
+
+## Infrastructure locale
+
+```bash
+# PostgreSQL
 docker run -d \
---name cueballs-postgres \
--e POSTGRES_USER=admin \
--e POSTGRES_PASSWORD=admin \
--e POSTGRES_DB=main \
--p 5432:5432 \
--v cueballs-postgres-data:/var/lib/postgresql/data \
-postgres:16-alpine
+  --name cueballs-postgres \
+  -e POSTGRES_USER=admin \
+  -e POSTGRES_PASSWORD=admin \
+  -e POSTGRES_DB=main \
+  -p 5432:5432 \
+  -v cueballs-postgres-data:/var/lib/postgresql/data \
+  postgres:16-alpine
+
+# Redis (pub/sub Socket.IO inter-pods)
+docker run -d \
+  --name cueballs-redis \
+  -p 6379:6379 \
+  -v cueballs-redis-data:/data \
+  redis:7-alpine
 ```
 
-## Project Structure
+---
 
+## Variables d'environnement
+
+Créer un `.env` à la racine :
+
+```env
+DATABASE_URL="postgresql://admin:admin@localhost:5432/main"
+REDIS_URL="redis://localhost:6379"
+JWT_SECRET="changeme"
+JWT_EXPIRES_IN="1d"
 ```
-src/
-├── auth/
-│   ├── dto/
-│   │   ├── register.dto.ts
-│   │   └── login.dto.ts
-│   ├── guards/
-│   │   └── jwt-auth.guard.ts
-│   ├── strategies/
-│   │   └── jwt.strategy.ts
-│   ├── auth.controller.ts
-│   │   # POST /auth/register, POST /auth/login
-│   ├── auth.service.ts
-│   │   # register: hash password + create Player
-│   │   # login: validate credentials + sign JWT
-│   └── auth.module.ts
-│
-├── players/
-│   ├── dto/
-│   │   └── update-player.dto.ts
-│   ├── players.controller.ts
-│   │   # GET /players/me, PATCH /players/me
-│   ├── players.service.ts
-│   │   # findMe: fetch authenticated player profile
-│   │   # updateMe: update username or avatar
-│   └── players.module.ts
-│
-├── games/
-│   ├── dto/
-│   │   ├── shoot.dto.ts
-│   │   └── shot-resolved.dto.ts
-│   ├── services/
-│   │   ├── games.service.ts
-│   │   │   # createGame: create Game + register caller as first GamePlayer
-│   │   │   # joinGame: register second GamePlayer + init 16 GameBalls + set ONGOING
-│   │   │   # listGames: fetch games filtered by status for lobby
-│   │   │   # getGame: fetch full game state (Game + GamePlayers + GameBalls) for reconnection
-│   │   │   # pauseGame: set PAUSED + persist
-│   │   │   # resumeGame: set ONGOING + persist
-│   │   │   # abandonGame: set ABANDONED + notify opponent via game_over
-│   │   ├── shot.service.ts
-│   │   │   # processShoot: validate turn ownership + forward opponent_shot to the other player
-│   │   │   # processShotResolved: orchestrate rules check + persist GameBalls state + emit shot_result to both + trigger game_over if needed
-│   │   └── game-rules.service.ts
-│   │       # isFoul: detect whether cue ball (number 0) was pocketed
-│   │       # resolveNextTurn: compute next turn player (same if legal pocket, opponent on miss or foul)
-│   │       # assignBallTypes: assign SOLIDS/STRIPES on first legal non-eight pocket after break
-│   │       # isGameOver: check win condition (eight pocketed after clearing own balls) or loss (eight pocketed too early)
-│   ├── games.controller.ts
-│   │   # POST /games
-│   │   # GET /games?status=
-│   │   # GET /games/:id
-│   │   # POST /games/:id/join
-│   ├── games.gateway.ts
-│   │   # handleConnection: decode JWT + find active game + join Socket.io room
-│   │   # handleDisconnect: emit player_left + start reconnection TTL timer
-│   │   # shoot: delegate to ShotService.processShoot
-│   │   # shot_resolved: delegate to ShotService.processShotResolved
-│   │   # pause_request: delegate to GamesService.pauseGame
-│   │   # resume_request: delegate to GamesService.resumeGame
-│   │   # leave_game: delegate to GamesService.abandonGame
-│   └── games.module.ts
-│
-├── prisma/
-│   ├── prisma.service.ts
-│   │   # extends PrismaClient
-│   │   # onModuleInit: open database connection
-│   │   # onModuleDestroy: close database connection
-│   └── prisma.module.ts
-│       # global module, exports PrismaService to all modules
-│
-├── adapters/
-│   └── redis-io.adapter.ts
-│       # extends IoAdapter
-│       # connectToRedis: establish Redis connection
-│       # createIOServer: attach @socket.io/redis-adapter for cross-pod WS event routing
-│
-└── app.module.ts
-    # root module, imports all feature modules
 
-prisma/
-├── schema.prisma
-└── seed.ts
-    # inserts the 16 static Ball rows (number, type, color)
+---
+
+## Base de données
+
+```bash
+# Générer le client Prisma
+npx prisma generate
+
+# Appliquer les migrations
+npx prisma migrate dev
+
+# Seed : insérer les 16 balles statiques
+npx prisma db seed
+```
+
+---
+
+## Lancer l'application
+
+```bash
+# Développement (watch mode)
+yarn start:dev
+
+# Production
+yarn build && yarn start:prod
 ```
