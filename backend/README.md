@@ -1,6 +1,6 @@
-# Cue & Balls — Backend
+# Cue & Balls - Backend
 
-API REST + WebSocket pour un jeu de billard 8-ball multijoueur en ligne. NestJS 11 + Prisma 7 + PostgreSQL + Redis.
+API REST + WebSocket pour un jeu de billard 8-ball multijoueur en ligne. NestJS 11 + Prisma 7 + PostgreSQL + Redis, brique backend.
 
 ---
 
@@ -14,7 +14,7 @@ API REST + WebSocket pour un jeu de billard 8-ball multijoueur en ligne. NestJS 
 ## Installation
 
 ```bash
-yarn install
+npm i
 ```
 
 ---
@@ -74,8 +74,8 @@ npx prisma db seed
 
 ```bash
 # Développement (watch mode)
-yarn start:dev
+npm run start:dev
 
 # Production
-yarn build && yarn start:prod
+npm run build && npm run start:prod
 ```
