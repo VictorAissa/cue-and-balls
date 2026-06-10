@@ -1,0 +1,93 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Game {
+  id          String     @id @default(uuid())
+  status      GameStatus @default(WAITING)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  gamePlayers GamePlayer[]
+  gameBalls   GameBall[]
+
+  @@map("games")
+}
+
+model Player {
+  id           String       @id @default(uuid())
+  userName     String       @unique
+  email        String       @unique
+  passwordHash String
+  createdAt    DateTime     @default(now())
+
+  gamePlayers GamePlayer[]
+
+  @@map("players")
+}
+
+model GamePlayer {
+  id       String    @id @default(uuid())
+  gameId   String
+  playerId String
+  ballType BallType?
+  isTurn   Boolean   @default(false)
+
+  game   Game   @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  player Player @relation(fields: [playerId], references: [id])
+
+  @@unique([gameId, playerId])
+  @@map("game_players")
+}
+
+model Ball {
+  id     String    @id @default(uuid())
+  number Int       @unique
+  type   BallType?
+  color  String
+
+  gameBalls GameBall[]
+
+  @@map("balls")
+}
+
+model GameBall {
+  id         String  @id @default(uuid())
+  gameId     String
+  ballId     String
+  x          Float
+  y          Float
+  isPocketed Boolean @default(false)
+
+  game Game @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  ball Ball @relation(fields: [ballId], references: [id])
+
+  @@unique([gameId, ballId])
+  @@map("game_balls")
+}
+
+enum BallType {
+  SOLIDS
+  STRIPES
+}
+
+enum GameStatus {
+  WAITING
+  ONGOING
+  PAUSED
+  FINISHED
+  ABANDONED
+}
+
+
