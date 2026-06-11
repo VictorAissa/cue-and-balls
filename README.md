@@ -157,7 +157,7 @@ The `REDIS_URL` and `JWT_EXPIRES_IN` fields can be left as-is for local developm
 
 ## Deploy the application
 
-Apply shared cluster resources (namespace + gateway) :
+Apply shared cluster resources (namespace + gateway), if a namespace error occurs just try a second time :
 
 ```bash
 kubectl apply -f cluster/k8s/pool/ -R

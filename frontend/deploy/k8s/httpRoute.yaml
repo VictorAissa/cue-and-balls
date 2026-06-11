@@ -7,7 +7,7 @@ spec:
   parentRefs:
     - name: pool-gateway
   hostnames:
-    - "web.10.96.63.134.nip.io" # get EXTERNAL-IP from traefik url attribution in cluster
+    - "web.10.107.52.39.nip.io" # get EXTERNAL-IP from traefik url attribution in cluster
     #- "web.xxx.xxx.xxx.xxx.nip.io" # get EXTERNAL-IP from traefik url attribution in cluster
   rules:
     - matches:

@@ -93,6 +93,10 @@ export class GamesService {
                     };
                 }),
             }),
+            this.prisma.gamePlayer.updateMany({
+                where: { gameId, playerId: { not: playerId } },
+                data: { isTurn: true },
+            }),
             this.prisma.game.update({
                 where: { id: gameId },
                 data: { status: GameStatus.ONGOING },
@@ -213,6 +217,20 @@ export class GamesService {
         if (!gamePlayer) return null;
 
         return this.formatGameDetail(gamePlayer.game);
+    }
+
+    /**
+     * Returns the opponent's GamePlayer record for a given game and player.
+     *
+     * @param gameId - ID of the game
+     * @param playerId - ID of the player whose opponent is sought
+     * @returns the opponent GamePlayer or null if not found
+     */
+    async findOpponent(gameId: string, playerId: string): Promise<{ playerId: string } | null> {
+        return this.prisma.gamePlayer.findFirst({
+            where: { gameId, playerId: { not: playerId } },
+            select: { playerId: true },
+        });
     }
 
     private formatGameDetail(
