@@ -202,8 +202,6 @@ curl -I http://web.<EXTERNAL-IP>.nip.io
 Check if swagger doc is available in your browser at :   
 > http://api.<EXTERNAL-IP>.nip.io/api
 
-TODO: add health endpoints
-
 ---
 
 ## Updating an image
