@@ -51,7 +51,7 @@ jobs:
         with:
           context: ./backend
           push: true
-          tags: ghcr.io/${{ github.repository }}/pool-backend:${{ steps.version.outputs.value }}
+          tags: ghcr.io/victoraissa/pool-backend:${{ steps.version.outputs.value }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -81,6 +81,6 @@ jobs:
         with:
           context: ./frontend
           push: true
-          tags: ghcr.io/${{ github.repository }}/pool-frontend:${{ steps.version.outputs.value }}
+          tags: ghcr.io/victoraissa/pool-frontend:${{ steps.version.outputs.value }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
