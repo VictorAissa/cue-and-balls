@@ -1,1 +1,5 @@
 **/deploy/k8s/secret*.yaml
+
+**/.terraform/
+**/*.tfstate
+**/*.tfstate.backup

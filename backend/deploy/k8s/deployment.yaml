@@ -16,8 +16,8 @@ spec:
       automountServiceAccountToken: false
       initContainers:
         - name: db-init
-          image: pool-backend:1.0.0
-          imagePullPolicy: Never
+          image: ${BACKEND_IMAGE}
+          imagePullPolicy: ${IMAGE_PULL_POLICY}
           command:
             - sh
             - -c
@@ -27,8 +27,8 @@ spec:
                 name: backend-secret
       containers:
         - name: backend
-          image: pool-backend:1.0.0
-          imagePullPolicy: Never
+          image: ${BACKEND_IMAGE}
+          imagePullPolicy: ${IMAGE_PULL_POLICY}
           ports:
             - containerPort: 3000
           env:

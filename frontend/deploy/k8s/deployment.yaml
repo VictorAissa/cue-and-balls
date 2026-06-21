@@ -16,8 +16,8 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: frontend
-          image: pool-frontend:1.0.0
-          imagePullPolicy: Never
+          image: ${FRONTEND_IMAGE}
+          imagePullPolicy: ${IMAGE_PULL_POLICY}
           ports:
             - containerPort: 80
           resources:
