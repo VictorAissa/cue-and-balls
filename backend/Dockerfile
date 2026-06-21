@@ -1,5 +1,5 @@
 # Stage 1: build
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /app
 
@@ -14,7 +14,7 @@ RUN npm run build
 RUN npm prune --omit=dev
 
 # Stage 2: run
-FROM node:20-alpine AS runner
+FROM node:22-alpine AS runner
 
 RUN addgroup -g 1001 -S nodejs && adduser -S nestjs -u 1001 -G nodejs
 
