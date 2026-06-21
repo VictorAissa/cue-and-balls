@@ -76,6 +76,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
                 this.server.to(gameId).emit('game_started', {
                     firstTurnPlayerId: turnPlayer?.player.id ?? gameState.gamePlayers[0].player.id,
                     players: gameState.gamePlayers,
+                    gameBalls: gameState.gameBalls,
                 });
             }
         } catch {
@@ -92,13 +93,10 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
         const timer = setTimeout(async () => {
             this.reconnectionTimers.delete(playerId);
-            const opponentSocket = await this.findOpponentSocket(gameId, playerId);
-            const winnerId = (opponentSocket as AuthenticatedSocket | undefined)?.playerId;
-
-            if (winnerId) {
-                this.server.to(gameId).emit('game_over', { winnerId, reason: 'OPPONENT_DISCONNECTED' });
+            const opponent = await this.gamesService.findOpponent(gameId, playerId);
+            if (opponent) {
+                this.server.to(gameId).emit('game_over', { winnerId: opponent.playerId, reason: 'OPPONENT_DISCONNECTED' });
             }
-
             await this.gamesService.abandonGame(gameId);
         }, RECONNECTION_TTL_MS);
 
@@ -113,11 +111,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         try {
             const { playerId, gameId } = client;
             const { shotParams } = await this.shotService.processShoot(gameId, playerId, dto);
-
-            const opponentSocket = await this.findOpponentSocket(gameId, playerId);
-            if (opponentSocket) {
-                opponentSocket.emit('opponent_shot', shotParams);
-            }
+            this.server.to(gameId).except(client.id).emit('opponent_shot', shotParams);
         } catch (err) {
             const code = err instanceof Error && err.message in WsErrorCode
                 ? err.message as WsErrorCode
@@ -140,8 +134,11 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
             if (gameOver) {
                 this.server.to(gameId).emit('game_over', gameOver);
             }
-        } catch {
-            client.emit('error', { code: WsErrorCode.INTERNAL_ERROR, message: 'Internal error' });
+        } catch (err) {
+            const code = err instanceof Error && err.message in WsErrorCode
+                ? err.message as WsErrorCode
+                : WsErrorCode.INTERNAL_ERROR;
+            client.emit('error', { code, message: err instanceof Error ? err.message : 'Internal error' });
         }
     }
 
@@ -171,14 +168,11 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     async handleLeaveGame(@ConnectedSocket() client: AuthenticatedSocket): Promise<void> {
         try {
             const { playerId, gameId } = client;
-            const opponentSocket = await this.findOpponentSocket(gameId, playerId);
-            const winnerId = (opponentSocket as AuthenticatedSocket | undefined)?.playerId;
-
-            if (winnerId) {
-                this.server.to(gameId).emit('game_over', { winnerId, reason: 'OPPONENT_LEFT' });
-            }
-
+            const opponent = await this.gamesService.findOpponent(gameId, playerId);
             await this.gamesService.abandonGame(gameId);
+            if (opponent) {
+                this.server.to(gameId).emit('game_over', { winnerId: opponent.playerId, reason: 'OPPONENT_LEFT' });
+            }
             client.disconnect();
         } catch {
             client.emit('error', { code: WsErrorCode.INTERNAL_ERROR, message: 'Internal error' });

@@ -6,6 +6,7 @@ import {PrismaModule} from "./prisma/prisma.module";
 import {APP_GUARD} from "@nestjs/core";
 import {ConfigModule} from "@nestjs/config";
 import {JwtAuthGuard} from "./auth/guard/jwt-auth.guard";
+import {HealthModule} from "./health/health.module";
 
 @Module({
     imports: [
@@ -14,6 +15,7 @@ import {JwtAuthGuard} from "./auth/guard/jwt-auth.guard";
         PlayersModule,
         GamesModule,
         PrismaModule,
+        HealthModule,
     ],
     providers: [
         { provide: APP_GUARD, useClass: JwtAuthGuard },

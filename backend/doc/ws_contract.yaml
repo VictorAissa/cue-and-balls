@@ -353,7 +353,14 @@ components:
               $ref: "#/components/schemas/GamePlayer"
             minItems: 2
             maxItems: 2
-        required: [firstTurnPlayerId, players]
+          gameBalls:
+            type: array
+            description: Initial ball positions — allows Player A to render the table without a REST call
+            items:
+              $ref: "#/components/schemas/GameBall"
+            minItems: 16
+            maxItems: 16
+        required: [firstTurnPlayerId, players, gameBalls]
 
     OpponentShot:
       name: opponent_shot

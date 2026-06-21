@@ -82,6 +82,10 @@ export class ShotService {
         const shooter = gamePlayers.find((gp) => gp.playerId === shooterId)!;
         const opponent = gamePlayers.find((gp) => gp.playerId !== shooterId)!;
 
+        if (!shooter?.isTurn) {
+            throw new Error('NOT_YOUR_TURN');
+        }
+
         const isFoul = this.gameRules.isFoul(dto.pocketedNumbers);
         const alreadyAssigned = gamePlayers.some((gp) => gp.ballType !== null);
 
@@ -124,7 +128,18 @@ export class ShotService {
             ]
             : dto.finalPositions;
 
-        await this.persist(gameId, shooter.id, opponent.id, dto, nextTurnPlayerId, ballTypesAssigned, isFoul, gameOver);
+        await this.persist(
+            gameId,
+            shooter.id,
+            shooterId,
+            opponent.id,
+            opponent.playerId,
+            dto,
+            nextTurnPlayerId,
+            ballTypesAssigned,
+            isFoul,
+            gameOver,
+        );
 
         return {
             shotResult: {
@@ -140,7 +155,9 @@ export class ShotService {
     private async persist(
         gameId: string,
         shooterGamePlayerId: string,
+        shooterId: string,
         opponentGamePlayerId: string,
+        opponentId: string,
         dto: ShotResolvedDto,
         nextTurnPlayerId: string,
         ballTypesAssigned: BallTypesAssigned,
@@ -166,9 +183,9 @@ export class ShotService {
         const shooterTurnUpdate = this.prisma.gamePlayer.update({
             where: { id: shooterGamePlayerId },
             data: {
-                isTurn: nextTurnPlayerId === shooterGamePlayerId,
+                isTurn: nextTurnPlayerId === shooterId,
                 ...(ballTypesAssigned && {
-                    ballType: ballTypesAssigned.solids === nextTurnPlayerId ? BallType.STRIPES : BallType.SOLIDS,
+                    ballType: ballTypesAssigned.solids === shooterId ? BallType.SOLIDS : BallType.STRIPES,
                 }),
             },
         });
@@ -176,9 +193,9 @@ export class ShotService {
         const opponentTurnUpdate = this.prisma.gamePlayer.update({
             where: { id: opponentGamePlayerId },
             data: {
-                isTurn: nextTurnPlayerId !== shooterGamePlayerId,
+                isTurn: nextTurnPlayerId === opponentId,
                 ...(ballTypesAssigned && {
-                    ballType: ballTypesAssigned.solids === opponentGamePlayerId ? BallType.SOLIDS : BallType.STRIPES,
+                    ballType: ballTypesAssigned.solids === opponentId ? BallType.SOLIDS : BallType.STRIPES,
                 }),
             },
         });
