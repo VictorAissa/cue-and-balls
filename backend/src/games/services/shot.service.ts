@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { BallType } from '../../generated/prisma/enums';
+import { BallType } from '../../generated/prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CUE_BALL_SPAWN } from '../constants/rack-positions';
 import { ShootDto } from '../dto/shoot.dto';
