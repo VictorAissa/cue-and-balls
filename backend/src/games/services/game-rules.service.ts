@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { BallType } from '../../generated/prisma/enums';
+import { BallType } from '../../generated/prisma/client';
 import { BallTypesAssigned, GameOverReason } from '../types/game.types';
 
 const CUE_BALL_NUMBER = 0;

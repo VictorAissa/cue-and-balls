@@ -1,0 +1,57 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: cueballs-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: main
+    ports:
+      - "5432:5432"
+    volumes:
+      - cueballs-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d main"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: cueballs-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - cueballs-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cueballs-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      PORT: 3000
+      DATABASE_URL: postgresql://admin:admin@postgres:5432/main
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: changeme
+      JWT_EXPIRES_IN: 1d
+    ports:
+      - "3000:3000"
+    command: ["node", "dist/src/main.js"]
+
+volumes:
+  cueballs-postgres-data:
+  cueballs-redis-data:

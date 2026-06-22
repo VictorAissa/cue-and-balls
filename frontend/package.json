@@ -11,10 +11,13 @@
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.0",
+    "install": "^0.13.0",
+    "npm": "^11.16.0",
     "pixi.js": "^8.18.1",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "react-router-dom": "^7.15.1",
+    "socket.io-client": "^4.8.3",
     "tailwindcss": "^4.3.0"
   },
   "devDependencies": {

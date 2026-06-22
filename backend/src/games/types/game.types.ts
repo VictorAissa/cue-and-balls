@@ -1,4 +1,4 @@
-import { BallType, GameStatus } from '../../generated/prisma/enums';
+import { BallType, GameStatus } from '../../generated/prisma/client';
 
 export type BallPosition = {
     number: number;

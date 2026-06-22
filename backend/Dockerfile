@@ -25,10 +25,10 @@ COPY --from=builder --chown=nestjs:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=nestjs:nodejs /app/package.json ./package.json
 COPY --from=builder --chown=nestjs:nodejs /app/prisma ./prisma
 COPY --from=builder --chown=nestjs:nodejs /app/prisma.config.ts ./prisma.config.ts
-COPY --from=builder --chown=nestjs:nodejs /app/src/generated ./src/generated
+COPY --from=builder --chown=nestjs:nodejs /app/src/generated ./dist/src/generated
 
 USER nestjs
 
 EXPOSE 3000
 
-CMD ["node", "dist/src/main"]
+CMD ["node", "dist/src/main.js"]
