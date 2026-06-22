@@ -122,12 +122,15 @@ kubectl get svc traefik -n traefik
 
 Note the value in the `EXTERNAL-IP` column (e.g. `10.101.159.91`).
 
-Update the `hostnames` field in both HTTPRoute files with this IP :
+Set `GATEWAY_IP` in `cluster/env.local` to this value, then render and apply the HTTPRoute templates :
 
+```bash
+source cluster/env.local
+envsubst < backend/deploy/k8s/httproute.yaml | kubectl apply -f -
+envsubst < frontend/deploy/k8s/httproute.yaml | kubectl apply -f -
 ```
-backend/deploy/k8s/httproute.yaml  ->  api.<EXTERNAL-IP>.nip.io
-frontend/deploy/k8s/httproute.yaml ->  web.<EXTERNAL-IP>.nip.io
-```
+
+> On Azure, the gateway IP is static — see `cluster/env.azure`, set once and never changed across `terraform destroy` / `apply` cycles.
 
 > **What is nip.io ?**
 > nip.io is a wildcard DNS service that resolves any hostname of the form `<anything>.<IP>.nip.io`
@@ -247,4 +250,305 @@ helm uninstall traefik --namespace traefik
 
 # Stop cluster
 minikube stop
+```
+
+---
+
+# Azure Deployment (AKS + Terraform)
+
+Cluster deployment on Azure Kubernetes Service via Terraform, as an alternative to the local Minikube setup. Routing relies on Traefik through the Gateway API, same as the Minikube setup.
+
+## Prerequisites
+
+### Azure CLI
+```bash
+# Pacman
+sudo pacman -S azure-cli
+```
+```bash
+# Verify
+az version
+```
+
+### Terraform
+```bash
+# Pacman
+sudo pacman -S terraform
+```
+```bash
+# Verify
+terraform version
+```
+
+### kubelogin (optional)
+Only needed for non-interactive auth (CI/CD, service principal). Not required
+for everyday interactive use — AKS clusters on Kubernetes 1.24+ use the
+kubelogin exec-plugin format automatically via Azure CLI login.
+```bash
+# AUR
+yay -S kubelogin-bin
+```
+```bash
+# Verify
+kubelogin --version
+```
+
+---
+
+## Connect to Azure
+
+```bash
+# Login (opens the browser)
+az login
+```
+
+```bash
+# Check the active subscription
+az account show --output table
+```
+
+```bash
+# If multiple subscriptions, select the right one
+az account set --subscription "<SUBSCRIPTION_ID>"
+```
+
+> Student subscriptions are commonly restricted to a subset of Azure regions
+> and VM sizes by a tenant-level policy. Check the allowed regions with:
+> ```bash
+> az policy assignment list --query "[?contains(displayName, 'location')]" --output json
+> ```
+> Look for `parameters.listOfAllowedLocations.value` in the result. VM size
+> restrictions are not exposed this way — they only surface as an error when
+> `terraform apply` attempts to create the cluster, with the allowed sizes
+> listed in the error message.
+
+---
+
+## Network resource group + static IP
+
+> Specific to the Azure plan. Provision once, kept across the cluster's
+> `terraform destroy` / `apply` cycles to preserve a stable public IP.
+
+```bash
+# Create the network resource group (if not already done)
+az group create --name rg-cueballs-network --location polandcentral
+```
+
+```bash
+# Reserve a static public IP
+az network public-ip create \
+  --resource-group rg-cueballs-network \
+  --name pip-cueballs-gateway \
+  --sku Standard \
+  --allocation-method Static
+```
+
+```bash
+# Retrieve the allocated IP (report it into cluster/env.azure)
+az network public-ip show \
+  --resource-group rg-cueballs-network \
+  --name pip-cueballs-gateway \
+  --query ipAddress -o tsv
+```
+
+Update the export line in cluster/env.azure.   
+
+The static IP is assigned to the `LoadBalancer` service that Traefik exposes for its
+`web` entrypoint (Gateway API, HTTP on port 8000). It is wired through the Traefik Helm
+values (`service` annotations / `loadBalancerIP`), giving a stable nip.io hostname unlike
+the Minikube setup, where the IP came from `minikube tunnel`.
+
+> This resource group and IP are billed continuously (~3-4$/month for the
+> Standard static IP), independent of the cluster's lifecycle. They are
+> intentionally kept outside Terraform's state so that destroying the cluster
+> never affects them.
+
+---
+
+## Provision the infrastructure (Terraform)
+
+Terraform code lives in `cluster/terraform/`.
+
+> The network resource group (`rg-cueballs-network`) and the static public IP are
+> referenced by Terraform but created beforehand (see section above).
+
+```bash
+cd cluster/terraform
+```
+
+```bash
+# Initialize (downloads the azurerm provider, sets up the backend)
+terraform init
+```
+
+```bash
+# Review the plan (dry-run) before any apply
+terraform plan
+```
+
+```bash
+# Apply — creates the cluster RG, the AKS cluster and the role assignment
+# AKS provisioning takes ~3 to 5 min
+terraform apply
+```
+
+Resources created:
+- `azurerm_resource_group.cluster`: `rg-cueballs-cluster` (region: `polandcentral`)
+- `azurerm_kubernetes_cluster.main`: `aks-cueballs` (1 node `Standard_B2as_v2`, Free SKU)
+- `azurerm_role_assignment.aks_network_contributor`: Network Contributor role on the network RG
+
+> Note: the student subscription policy restricts which regions and VM sizes
+> are allowed (see `cluster/terraform/variables.tf` for the current `location`
+> default). If `terraform apply` fails with a region or VM size error, check
+> the allowed list returned in the error message before retrying.
+
+```bash
+# Tear down everything (cluster, node, LB, disks) when done for the session
+terraform destroy
+```
+
+> `terraform destroy` does not touch `rg-cueballs-network` or the static IP —
+> they live outside this Terraform state by design.
+
+---
+
+## Retrieve the kubectl context
+
+> The AKS API server FQDN embeds a random suffix regenerated on every cluster
+> creation. After a `terraform destroy` / `apply` cycle the FQDN changes, so any
+> kubeconfig entry from a previous cluster goes stale and resolves to
+> "no such host". The kubeconfig must be refreshed after every `apply`.
+
+Refresh it straight from the Terraform state (does not depend on the Azure CLI):
+
+```bash
+# Dump the fresh kubeconfig exposed by the cluster module output
+terraform output -raw kube_config > /tmp/aks-cueballs.kubeconfig
+```
+
+```bash
+# Merge it into ~/.kube/config, keeping other contexts (e.g. minikube) intact.
+# The fresh file is listed FIRST so its values win over any stale entry on conflict.
+KUBECONFIG=/tmp/aks-cueballs.kubeconfig:$HOME/.kube/config \
+  kubectl config view --flatten > /tmp/kubeconfig.merged
+mv /tmp/kubeconfig.merged "$HOME/.kube/config"
+```
+
+```bash
+# Sanity check
+kubectl config current-context   # → aks-cueballs
+kubectl get nodes                # → node Ready
+```
+
+> Fallback only: `az aks get-credentials --resource-group rg-cueballs-cluster \
+> --name aks-cueballs --overwrite-existing` achieves the same result but relies on
+> a working Azure CLI, which can break on dependency upgrades on a rolling-release
+> distro. The Terraform output method above is the reliable default.
+
+> To switch back to Minikube: `kubectl config use-context minikube`.
+> Always check `kubectl config current-context` before any `apply` / `delete`.
+
+---
+
+## Deploy Traefik
+
+Traefik is installed via Helm with the Gateway API provider enabled (`kubernetesGateway`)
+and the Ingress provider disabled. The `web` listener serves HTTP on port 8000 and accepts
+routes from all namespaces.
+
+```bash
+# Install Gateway API CRDs before Traefik, the Helm chart requires them to exist at install time.
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.1/standard-install.yaml
+```
+
+```bash
+helm repo add traefik https://traefik.github.io/charts
+helm repo update
+```
+
+```bash
+helm install traefik traefik/traefik \
+  --namespace traefik \
+  --create-namespace \
+  -f cluster/k8s/traefik/values.yaml
+```
+
+```bash
+# Confirm the GatewayClass is accepted by the cluster before proceeding
+kubectl get gatewayclass
+```
+
+```bash
+# The EXTERNAL-IP should match the reserved static IP (pip-cueballs-gateway).
+kubectl get svc traefik -n traefik
+```
+
+> The external IP should match the reserved static IP. Report it into `cluster/env.azure`,
+> then render and apply the HTTPRoute templates as in the Minikube setup.
+
+---
+
+## Deploy cluster
+
+```bash
+# Load env vars (GATEWAY_IP, BACKEND_IMAGE, FRONTEND_IMAGE, IMAGE_PULL_POLICY)
+# required by envsubst for the templated manifests below
+source cluster/env.azure
+```
+
+```bash
+# Create the pool namespace and the Gateway object (Traefik entry point).
+# If a namespace error occurs on first run, apply a second time.
+kubectl apply -f cluster/k8s/pool/ -R
+```
+
+```bash
+# Deploy PostgreSQL StatefulSet + PVC + Service
+kubectl apply -f db/deploy/k8s/ -R
+```
+
+```bash
+# Deploy Redis 
+kubectl apply -f redis/deploy/k8s/ -R
+```
+
+```bash
+# Block until the postgres pod is Ready before applying the backend.
+kubectl wait --for=condition=ready pod -l app=postgres -n pool --timeout=120s
+```
+
+```bash
+# Render the backend Deployment manifest and apply it.
+envsubst < backend/deploy/k8s/deployment.yaml | kubectl apply -f -
+```
+
+```bash
+# Render and apply the backend HTTPRoute
+envsubst < backend/deploy/k8s/httpRoute.yaml | kubectl apply -f -
+```
+
+```bash
+# Apply backend Secret.
+kubectl apply -f backend/deploy/k8s/secret.yaml -f backend/deploy/k8s/service.yaml
+```
+
+```bash
+# Render and apply the frontend Deployment.
+envsubst < frontend/deploy/k8s/deployment.yaml | kubectl apply -f -
+```
+
+```bash
+# Render and apply the frontend HTTPRoute.
+envsubst < frontend/deploy/k8s/httpRoute.yaml | kubectl apply -f -
+```
+
+```bash
+# Apply the frontend ClusterIP Service
+kubectl apply -f frontend/deploy/k8s/service.yaml
+```
+
+```bash
+# Check all pods are Running in the pool namespace.
+# The backend pod starts only after the init container completes (~30s on first deploy).
+kubectl get pods -n pool
 ```

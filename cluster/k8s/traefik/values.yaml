@@ -1,9 +1,13 @@
+service:
+  annotations:
+    service.beta.kubernetes.io/azure-pip-name: "pip-cueballs-gateway"
+    service.beta.kubernetes.io/azure-load-balancer-resource-group: "rg-cueballs-network"
+
 providers:
   kubernetesIngress:
     enabled: false
   kubernetesGateway:
     enabled: true
-
 gateway:
   listeners:
     web:
