@@ -414,28 +414,36 @@ terraform destroy
 
 ## Retrieve the kubectl context
 
+> The AKS API server FQDN embeds a random suffix regenerated on every cluster
+> creation. After a `terraform destroy` / `apply` cycle the FQDN changes, so any
+> kubeconfig entry from a previous cluster goes stale and resolves to
+> "no such host". The kubeconfig must be refreshed after every `apply`.
+
+Refresh it straight from the Terraform state (does not depend on the Azure CLI):
+
 ```bash
-# Merge the AKS context into ~/.kube/config and set it as current
-az aks get-credentials \
-  --resource-group rg-cueballs-cluster \
-  --name aks-cueballs
+# Dump the fresh kubeconfig exposed by the cluster module output
+terraform output -raw kube_config > /tmp/aks-cueballs.kubeconfig
 ```
 
 ```bash
-# Optional: convert the kubeconfig for non-interactive auth (kubelogin), only
-# needed for CI/CD or service principal scenarios — skip for everyday manual use
-kubelogin convert-kubeconfig -l azurecli
+# Merge it into ~/.kube/config, keeping other contexts (e.g. minikube) intact.
+# The fresh file is listed FIRST so its values win over any stale entry on conflict.
+KUBECONFIG=/tmp/aks-cueballs.kubeconfig:$HOME/.kube/config \
+  kubectl config view --flatten > /tmp/kubeconfig.merged
+mv /tmp/kubeconfig.merged "$HOME/.kube/config"
 ```
 
 ```bash
-# Check the active context
+# Sanity check
 kubectl config current-context   # → aks-cueballs
-```
-
-```bash
-# Check the node is up
 kubectl get nodes                # → node Ready
 ```
+
+> Fallback only: `az aks get-credentials --resource-group rg-cueballs-cluster \
+> --name aks-cueballs --overwrite-existing` achieves the same result but relies on
+> a working Azure CLI, which can break on dependency upgrades on a rolling-release
+> distro. The Terraform output method above is the reliable default.
 
 > To switch back to Minikube: `kubectl config use-context minikube`.
 > Always check `kubectl config current-context` before any `apply` / `delete`.
@@ -447,6 +455,11 @@ kubectl get nodes                # → node Ready
 Traefik is installed via Helm with the Gateway API provider enabled (`kubernetesGateway`)
 and the Ingress provider disabled. The `web` listener serves HTTP on port 8000 and accepts
 routes from all namespaces.
+
+```bash
+# Install Gateway API CRDs before Traefik, the Helm chart requires them to exist at install time.
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.1/standard-install.yaml
+```
 
 ```bash
 helm repo add traefik https://traefik.github.io/charts
@@ -461,7 +474,12 @@ helm install traefik traefik/traefik \
 ```
 
 ```bash
-# Retrieve the LoadBalancer external IP assigned to Traefik
+# Confirm the GatewayClass is accepted by the cluster before proceeding
+kubectl get gatewayclass
+```
+
+```bash
+# The EXTERNAL-IP should match the reserved static IP (pip-cueballs-gateway).
 kubectl get svc traefik -n traefik
 ```
 
@@ -470,8 +488,67 @@ kubectl get svc traefik -n traefik
 
 ---
 
-## Next
+## Deploy cluster
 
-Application deployment (secrets, db, redis, backend, frontend, HTTPRoutes) stays identical
-to the Minikube setup — see the sections above. The only difference: the image is no longer
-loaded via `minikube image load` but pulled from ghcr.io (see CI/CD).
+```bash
+# Load env vars (GATEWAY_IP, BACKEND_IMAGE, FRONTEND_IMAGE, IMAGE_PULL_POLICY)
+# required by envsubst for the templated manifests below
+source cluster/env.azure
+```
+
+```bash
+# Create the pool namespace and the Gateway object (Traefik entry point).
+# If a namespace error occurs on first run, apply a second time.
+kubectl apply -f cluster/k8s/pool/ -R
+```
+
+```bash
+# Deploy PostgreSQL StatefulSet + PVC + Service
+kubectl apply -f db/deploy/k8s/ -R
+```
+
+```bash
+# Deploy Redis 
+kubectl apply -f redis/deploy/k8s/ -R
+```
+
+```bash
+# Block until the postgres pod is Ready before applying the backend.
+kubectl wait --for=condition=ready pod -l app=postgres -n pool --timeout=120s
+```
+
+```bash
+# Render the backend Deployment manifest and apply it.
+envsubst < backend/deploy/k8s/deployment.yaml | kubectl apply -f -
+```
+
+```bash
+# Render and apply the backend HTTPRoute
+envsubst < backend/deploy/k8s/httpRoute.yaml | kubectl apply -f -
+```
+
+```bash
+# Apply backend Secret.
+kubectl apply -f backend/deploy/k8s/secret.yaml -f backend/deploy/k8s/service.yaml
+```
+
+```bash
+# Render and apply the frontend Deployment.
+envsubst < frontend/deploy/k8s/deployment.yaml | kubectl apply -f -
+```
+
+```bash
+# Render and apply the frontend HTTPRoute.
+envsubst < frontend/deploy/k8s/httpRoute.yaml | kubectl apply -f -
+```
+
+```bash
+# Apply the frontend ClusterIP Service
+kubectl apply -f frontend/deploy/k8s/service.yaml
+```
+
+```bash
+# Check all pods are Running in the pool namespace.
+# The backend pod starts only after the init container completes (~30s on first deploy).
+kubectl get pods -n pool
+```
