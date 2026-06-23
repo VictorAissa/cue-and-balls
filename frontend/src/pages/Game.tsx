@@ -1,15 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link, Navigate, useParams } from 'react-router-dom'
+import { Navigate, useNavigate, useParams } from 'react-router-dom'
 import { io, type Socket } from 'socket.io-client'
 import GameStage from '@components/game/GameStage'
+import hourglassIconUrl from '@assets/hourglass-svgrepo-com.svg'
+import { API_BASE_URL, SOCKET_BASE_URL } from '../lib/api'
 import type {
-  BallPosition,
-  BallTypesAssigned,
-  GameBall,
   GameOverPayload,
-  GamePlayer,
   GameStartedPayload,
-  GameState,
   GameStageHandle,
   Player,
   PlayerLeftPayload,
@@ -18,129 +15,23 @@ import type {
   ShotResolvedPayload,
   ShotResultPayload,
 } from '@components/game/gameStageTypes'
+import { PlayerScoreCard } from './game/PlayerScoreCard'
+import {
+  applyBallTypes,
+  applyShotResultToBalls,
+  applyTurn,
+  getGameOverCopy,
+  getPlayerBallSummary,
+  parseResponse,
+  type ApiErrorPayload,
+  type GameDetail,
+} from './game/gamePageUtils'
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL ?? 'http://api.10.108.143.255.nip.io'
-
-type GameDetail = {
-  game: GameState
-  gamePlayers: GamePlayer[]
-  gameBalls: GameBall[]
-}
-
-type ApiErrorPayload = {
-  code?: string
-  message?: string
-}
-
-function formatDate(date: string) {
-  return new Intl.DateTimeFormat('fr-FR', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(new Date(date))
-}
-
-async function parseResponse<T>(response: Response) {
-  const rawBody = await response.text()
-  let parsedBody: unknown = null
-
-  if (rawBody) {
-    try {
-      parsedBody = JSON.parse(rawBody)
-    } catch {
-      parsedBody = null
-    }
-  }
-
-  return parsedBody as T | null
-}
-
-function applyBallTypes(players: GamePlayer[], assignment?: BallTypesAssigned | null) {
-  if (!assignment) {
-    return players
-  }
-
-  return players.map<GamePlayer>((entry) => {
-    if (entry.player.id === assignment.solids) {
-      return {
-        ...entry,
-        ballType: 'SOLIDS' as const,
-      }
-    }
-
-    if (entry.player.id === assignment.stripes) {
-      return {
-        ...entry,
-        ballType: 'STRIPES' as const,
-      }
-    }
-
-    return entry
-  })
-}
-
-function applyTurn(players: GamePlayer[], nextTurnPlayerId: string) {
-  return players.map((entry) => ({
-    ...entry,
-    isTurn: entry.player.id === nextTurnPlayerId,
-  }))
-}
-
-function applyShotResultToBalls(
-  existingBalls: GameBall[],
-  finalPositions: BallPosition[],
-  pocketedNumbers: number[],
-) {
-  const positionsByNumber = new Map(
-    finalPositions.map((position) => [position.number, position]),
-  )
-  const pocketed = new Set(pocketedNumbers)
-
-  return existingBalls.map((entry) => {
-    const nextPosition = positionsByNumber.get(entry.ball.number)
-
-    if (nextPosition) {
-      return {
-        ...entry,
-        x: nextPosition.x,
-        y: nextPosition.y,
-        isPocketed: false,
-      }
-    }
-
-    return {
-      ...entry,
-      isPocketed: pocketed.has(entry.ball.number),
-    }
-  })
-}
-
-function getGameOverCopy(payload: GameOverPayload | null, players: GamePlayer[]) {
-  if (!payload) {
-    return null
-  }
-
-  const winnerName =
-    players.find((entry) => entry.player.id === payload.winnerId)?.player.username ??
-    'Joueur inconnu'
-
-  const reasonLabel =
-    payload.reason === 'EIGHT_BALL_POCKETED'
-      ? 'Noire empochée légalement'
-      : payload.reason === 'FOUL_ON_EIGHT'
-        ? 'Faute sur la noire'
-        : payload.reason === 'OPPONENT_LEFT'
-          ? 'Adversaire parti'
-          : 'Adversaire non reconnecté'
-
-  return {
-    winnerName,
-    reasonLabel,
-  }
-}
+type PocketedByPlayer = Record<string, number[]>
 
 export default function Game() {
   const { id } = useParams<{ id: string }>()
+  const navigate = useNavigate()
   const stageRef = useRef<GameStageHandle | null>(null)
   const socketRef = useRef<Socket | null>(null)
   const [gameDetail, setGameDetail] = useState<GameDetail | null>(null)
@@ -150,6 +41,8 @@ export default function Game() {
   const [isSocketConnected, setIsSocketConnected] = useState(false)
   const [disconnectedPlayerId, setDisconnectedPlayerId] = useState<string | null>(null)
   const [gameOver, setGameOver] = useState<GameOverPayload | null>(null)
+  const [isSimulationRunning, setIsSimulationRunning] = useState(false)
+  const [pocketedByPlayer, setPocketedByPlayer] = useState<PocketedByPlayer>({})
 
   const token = localStorage.getItem('accessToken')
 
@@ -177,24 +70,7 @@ export default function Game() {
       return parsedBody as Player
     }
 
-    async function fetchGameDetail() {
-      const response = await fetch(`${API_BASE_URL}/games/${id}`, {
-        headers: {
-          Accept: 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-      })
-
-      const parsedBody = await parseResponse<GameDetail & ApiErrorPayload>(response)
-
-      if (!response.ok) {
-        throw new Error(parsedBody?.message ?? `Le serveur a retourne le statut ${response.status}.`)
-      }
-
-      return parsedBody as GameDetail
-    }
-
-    const socket = io(`${API_BASE_URL}/game`, {
+    const socket = io(`${SOCKET_BASE_URL}/game`, {
       auth: {
         token: `Bearer ${token}`,
       },
@@ -205,19 +81,14 @@ export default function Game() {
 
     const hydrateFromServer = async () => {
       try {
-        const [player, detail] = await Promise.all([
-          fetchCurrentPlayer(),
-          fetchGameDetail(),
-        ])
+        const player = await fetchCurrentPlayer()
 
         if (isCancelled) {
           return
         }
 
         setCurrentPlayer(player)
-        setGameDetail(detail)
         setError(null)
-        stageRef.current?.applyAuthoritativeState(detail.gameBalls)
       } catch (requestError) {
         if (!isCancelled) {
           setError(
@@ -246,6 +117,7 @@ export default function Game() {
     socket.on('disconnect', () => {
       if (!isCancelled) {
         setIsSocketConnected(false)
+        setIsSimulationRunning(false)
       }
     })
 
@@ -257,21 +129,49 @@ export default function Game() {
     })
 
     socket.on('room_joined', (payload: RoomJoinedPayload) => {
+      console.log('[Game] room_joined', {
+        gameId: payload.game.id,
+        status: payload.game.status,
+        players: payload.gamePlayers.map((entry) => ({
+          playerId: entry.player.id,
+          username: entry.player.username,
+          isTurn: entry.isTurn,
+          ballType: entry.ballType ?? null,
+        })),
+        ballCount: payload.gameBalls.length,
+      })
+
       if (isCancelled) {
         return
       }
 
       setGameDetail(payload)
+      setGameOver(null)
       setDisconnectedPlayerId(null)
       setError(null)
+      setIsSimulationRunning(false)
+      setPocketedByPlayer({})
       setIsLoading(false)
       stageRef.current?.applyAuthoritativeState(payload.gameBalls)
     })
 
     socket.on('game_started', (payload: GameStartedPayload) => {
+      console.log('[Game] game_started', {
+        firstTurnPlayerId: payload.firstTurnPlayerId,
+        players: payload.players.map((entry) => ({
+          playerId: entry.player.id,
+          username: entry.player.username,
+          isTurn: entry.isTurn,
+          ballType: entry.ballType ?? null,
+        })),
+        ballCount: payload.gameBalls.length,
+      })
+
       if (isCancelled) {
         return
       }
+
+      stageRef.current?.applyAuthoritativeState(payload.gameBalls)
 
       setGameDetail((current) => {
         if (!current) {
@@ -285,29 +185,42 @@ export default function Game() {
             status: 'ONGOING',
           },
           gamePlayers: applyTurn(payload.players, payload.firstTurnPlayerId),
+          gameBalls: payload.gameBalls,
         }
       })
       setDisconnectedPlayerId(null)
       setGameOver(null)
+      setIsSimulationRunning(false)
+      setPocketedByPlayer({})
       setIsLoading(false)
     })
 
     socket.on('opponent_shot', (payload: ShotPayload) => {
+      console.log('[Game] opponent_shot received', payload)
+
       if (!isCancelled) {
+        setIsSimulationRunning(true)
         stageRef.current?.playRemoteShot(payload)
       }
     })
 
     socket.on('shot_result', (payload: ShotResultPayload) => {
+      console.log('[Game] shot_result received', payload)
+
       if (isCancelled) {
         return
       }
 
+      let shooterPlayerId: string | null = null
       stageRef.current?.applyShotResult(payload)
+      setIsSimulationRunning(false)
       setGameDetail((current) => {
         if (!current) {
           return current
         }
+
+        shooterPlayerId =
+          current.gamePlayers.find((entry) => entry.isTurn)?.player.id ?? null
 
         return {
           game: {
@@ -326,7 +239,23 @@ export default function Game() {
           ),
         }
       })
+      setPocketedByPlayer((current) => {
+        if (!shooterPlayerId) {
+          return current
+        }
+
+        const newlyPocketed = payload.pocketedNumbers.filter((number) => number !== 0)
+        if (newlyPocketed.length === 0) {
+          return current
+        }
+
+        return {
+          ...current,
+          [shooterPlayerId]: [...(current[shooterPlayerId] ?? []), ...newlyPocketed],
+        }
+      })
       setDisconnectedPlayerId(null)
+      setGameOver(null)
     })
 
     socket.on('player_left', (payload: PlayerLeftPayload) => {
@@ -343,6 +272,7 @@ export default function Game() {
       }
 
       setGameOver(payload)
+      setIsSimulationRunning(false)
       setGameDetail((current) => {
         if (!current) {
           return current
@@ -385,10 +315,6 @@ export default function Game() {
     currentPlayer
       ? players.find((entry) => entry.player.id !== currentPlayer.id) ?? null
       : null
-  const isRoomReady =
-    gameDetail?.game.status === 'ONGOING' &&
-    players.length === 2 &&
-    currentPlayerEntry !== null
   const canShoot =
     isSocketConnected &&
     gameDetail?.game.status === 'ONGOING' &&
@@ -396,45 +322,32 @@ export default function Game() {
     disconnectedPlayerId === null &&
     gameOver === null
   const gameOverCopy = getGameOverCopy(gameOver, players)
+  const currentPlayerSummary = getPlayerBallSummary(
+    currentPlayerEntry,
+    currentPlayerEntry ? pocketedByPlayer[currentPlayerEntry.player.id] ?? [] : [],
+  )
+  const opponentSummary = getPlayerBallSummary(
+    opponentEntry,
+    opponentEntry ? pocketedByPlayer[opponentEntry.player.id] ?? [] : [],
+  )
 
   function handleShoot(payload: ShotPayload) {
+    console.log('[Game] emit shoot', payload)
+    setIsSimulationRunning(true)
     socketRef.current?.emit('shoot', payload)
   }
 
   function handleShotResolved(payload: ShotResolvedPayload) {
+    console.log('[Game] emit shot_resolved', payload)
     socketRef.current?.emit('shot_resolved', payload)
   }
 
-  function getStatusLabel() {
-    if (gameOverCopy) {
-      return `Partie terminee · ${gameOverCopy.winnerName}`
-    }
-
-    if (!isSocketConnected) {
-      return 'Connexion au serveur en cours'
-    }
-
-    if (disconnectedPlayerId && opponentEntry?.player.id === disconnectedPlayerId) {
-      return 'Adversaire hors ligne, reprise en attente'
-    }
-
-    if (gameDetail?.game.status === 'WAITING') {
-      return 'Room en attente du deuxieme joueur'
-    }
-
-    if (gameDetail?.game.status === 'PAUSED') {
-      return 'Partie en pause'
-    }
-
-    if (currentPlayerEntry?.isTurn) {
-      return 'A vous de jouer'
-    }
-
-    if (opponentEntry) {
-      return `Tour de ${opponentEntry.player.username}`
-    }
-
-    return 'Synchronisation de la table'
+  function handleLeaveGame() {
+    console.log('[Game] emit leave_game')
+    socketRef.current?.emit('leave_game')
+    socketRef.current?.disconnect()
+    socketRef.current = null
+    navigate('/lobby')
   }
 
   if (!token) {
@@ -449,113 +362,78 @@ export default function Game() {
     <main className="app-page">
       <section className="mx-auto max-w-6xl">
         <div className="game-stage">
-          <div className="game-table">
-            <GameStage
-              ref={stageRef}
-              balls={gameDetail?.gameBalls ?? []}
-              canShoot={Boolean(canShoot)}
-              statusLabel={getStatusLabel()}
-              onShoot={handleShoot}
-              onShotResolved={handleShotResolved}
-            />
+          <div className="game-layout">
+            <div className="game-player-column game-player-column-left">
+              <PlayerScoreCard
+                entry={currentPlayerEntry}
+                fallbackName="Joueur A"
+                summary={currentPlayerSummary}
+              />
+            </div>
+
+            <div className="game-table-shell">
+              {error && <p className="game-scoreboard-error">{error}</p>}
+
+              <div className="game-table-main">
+                <div className="game-table">
+                  <GameStage
+                    ref={stageRef}
+                    balls={gameDetail?.gameBalls ?? []}
+                    canShoot={Boolean(canShoot)}
+                    onShoot={handleShoot}
+                    onShotResolved={handleShotResolved}
+                  />
+                </div>
+              </div>
+
+              <div className="game-table-actions">
+                <span className={`status-pill ${isSocketConnected ? 'success' : 'pending'}`}>
+                  {isSocketConnected ? 'Connecté' : 'Connexion...'}
+                </span>
+
+                {gameDetail?.game.status === 'WAITING' && !isLoading && (
+                  <div className="game-inline-notice">
+                    En attente du deuxieme joueur.
+                  </div>
+                )}
+
+                {disconnectedPlayerId && !gameOverCopy && (
+                  <div className="game-inline-notice">
+                    Reconnexion adverse en attente.
+                  </div>
+                )}
+
+                {isSimulationRunning && (
+                  <div className="game-wait-indicator" aria-live="polite">
+                    <img
+                      alt=""
+                      className="game-wait-indicator-icon"
+                      src={hourglassIconUrl}
+                    />
+                    <span>Attendez la fin du coup</span>
+                  </div>
+                )}
+
+                <button
+                  className="app-button-secondary game-scoreboard-leave"
+                  onClick={handleLeaveGame}
+                  type="button"
+                >
+                  Retour au lobby
+                </button>
+              </div>
+            </div>
+
+            <div className="game-player-column game-player-column-right">
+              <PlayerScoreCard
+                entry={opponentEntry}
+                fallbackName="Joueur B"
+                summary={opponentSummary}
+              />
+            </div>
           </div>
 
-          <aside className="game-sidebar">
-            <div className="app-panel-soft rounded-[1.25rem] p-4">
-              <p className="text-xs font-bold uppercase tracking-[0.18em] text-amber-900">
-                Partie
-              </p>
-              <p className="mt-2 text-sm font-semibold text-zinc-900">
-                Statut: {gameDetail?.game.status ?? 'Chargement'}
-              </p>
-              {gameDetail?.game.createdAt && (
-                <p className="mt-1 text-sm text-zinc-700">
-                  Creee le {formatDate(gameDetail.game.createdAt)}
-                </p>
-              )}
-              <div className="game-status-line mt-4">
-                <span className={`status-pill ${isSocketConnected ? 'success' : 'pending'}`}>
-                  {isSocketConnected ? 'WS connecte' : 'WS connexion'}
-                </span>
-              </div>
-            </div>
-
-            <div className="app-panel-soft rounded-[1.25rem] p-4">
-              <p className="text-xs font-bold uppercase tracking-[0.18em] text-amber-900">
-                Vous
-              </p>
-              <div className="mt-3 space-y-3">
-                <div className="game-player-row">
-                  <div className="lobby-avatar">
-                    {currentPlayerEntry?.player.username?.slice(0, 1).toUpperCase() ?? '?'}
-                  </div>
-                  <div>
-                    <p className="font-semibold text-zinc-900">
-                      {currentPlayerEntry?.player.username ?? 'Profil en cours'}
-                    </p>
-                    <p className="text-sm text-zinc-600">
-                      {currentPlayerEntry?.ballType
-                        ? `Serie: ${currentPlayerEntry.ballType}`
-                        : 'Serie non attribuee'}
-                    </p>
-                    <p className="text-sm text-zinc-600">
-                      {currentPlayerEntry?.isTurn ? 'A le tour' : 'En attente'}
-                    </p>
-                  </div>
-                </div>
-
-                <div className={`game-player-row ${opponentEntry ? '' : 'waiting'}`}>
-                  <div className="lobby-avatar">
-                    {opponentEntry?.player.username?.slice(0, 1).toUpperCase() ?? '?'}
-                  </div>
-                  <div>
-                    <p className="font-semibold text-zinc-900">
-                      {opponentEntry?.player.username ?? 'Adversaire en attente'}
-                    </p>
-                    <p className="text-sm text-zinc-600">
-                      {opponentEntry?.ballType
-                        ? `Serie: ${opponentEntry.ballType}`
-                        : 'Serie non attribuee'}
-                    </p>
-                    <p className="text-sm text-zinc-600">
-                      {disconnectedPlayerId === opponentEntry?.player.id
-                        ? 'Deconnecte'
-                        : opponentEntry?.isTurn
-                          ? 'A le tour'
-                          : 'En attente'}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {gameOverCopy && (
-              <div className="app-panel-soft rounded-[1.25rem] p-4">
-                <p className="text-xs font-bold uppercase tracking-[0.18em] text-amber-900">
-                  Fin de partie
-                </p>
-                <p className="mt-2 text-lg font-black text-zinc-900">
-                  Victoire: {gameOverCopy.winnerName}
-                </p>
-                <p className="mt-1 text-sm text-zinc-700">
-                  Motif: {gameOverCopy.reasonLabel}
-                </p>
-              </div>
-            )}
-
-            {error && (
-              <div className="app-feedback error">
-                <p className="font-semibold">Suivi de partie indisponible</p>
-                <p className="mt-1">{error}</p>
-              </div>
-            )}
-
-            <Link className="app-button-secondary w-full" to="/lobby">
-              Retour au lobby
-            </Link>
-          </aside>
-
-          {(!isRoomReady || isLoading || disconnectedPlayerId || gameOverCopy) && (
+          {(isLoading || disconnectedPlayerId || gameOverCopy) && (
             <div className="game-modal-backdrop">
               <div className="game-modal">
                 <span className="app-kicker">Partie</span>

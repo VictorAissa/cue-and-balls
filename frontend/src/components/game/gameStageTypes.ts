@@ -72,6 +72,16 @@ export type ShotResultPayload = ShotResolvedPayload & {
 export type GameStartedPayload = {
   firstTurnPlayerId: string
   players: GamePlayer[]
+  gameBalls: GameBall[]
+}
+
+export type GameHudRow = {
+  playerName: string
+  ballType?: BallType | null
+  remaining: number[]
+  pocketed: number[]
+  isTurn: boolean
+  isCurrentPlayer: boolean
 }
 
 export type PlayerLeftPayload = {
