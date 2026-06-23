@@ -122,21 +122,13 @@ kubectl get svc traefik -n traefik
 
 Note the value in the `EXTERNAL-IP` column (e.g. `10.101.159.91`).
 
-Set `GATEWAY_IP` in `cluster/env.local` to this value, then render and apply the HTTPRoute templates :
+Set `DOMAIN` in `cluster/k8s/.env.local` to "<EXTERNAL-IP>.nip.io", then render and apply the HTTPRoute templates:
 
 ```bash
-source cluster/env.local
+source cluster/k8s/.env.local
 envsubst < backend/deploy/k8s/httproute.yaml | kubectl apply -f -
 envsubst < frontend/deploy/k8s/httproute.yaml | kubectl apply -f -
 ```
-
-> On Azure, the gateway IP is static — see `cluster/env.azure`, set once and never changed across `terraform destroy` / `apply` cycles.
-
-> **What is nip.io ?**
-> nip.io is a wildcard DNS service that resolves any hostname of the form `<anything>.<IP>.nip.io`
-> directly to `<IP>`, with no DNS configuration required. This lets us use proper hostnames locally
-> without editing `/etc/hosts`. The IP here is the one assigned by `minikube tunnel` to the Traefik
-> LoadBalancer — it is stable as long as the Traefik Helm release exists, but changes on full reinstall.
 
 ---
 
@@ -280,19 +272,6 @@ sudo pacman -S terraform
 terraform version
 ```
 
-### kubelogin (optional)
-Only needed for non-interactive auth (CI/CD, service principal). Not required
-for everyday interactive use — AKS clusters on Kubernetes 1.24+ use the
-kubelogin exec-plugin format automatically via Azure CLI login.
-```bash
-# AUR
-yay -S kubelogin-bin
-```
-```bash
-# Verify
-kubelogin --version
-```
-
 ---
 
 ## Connect to Azure
@@ -344,14 +323,14 @@ az network public-ip create \
 ```
 
 ```bash
-# Retrieve the allocated IP (report it into cluster/env.azure)
+# Retrieve the allocated IP (report it into cluster/k8s/.env.azure)
 az network public-ip show \
   --resource-group rg-cueballs-network \
   --name pip-cueballs-gateway \
   --query ipAddress -o tsv
 ```
 
-Update the export line in cluster/env.azure.   
+Update the export line in cluster/k8s/.env.azure.   
 
 The static IP is assigned to the `LoadBalancer` service that Traefik exposes for its
 `web` entrypoint (Gateway API, HTTP on port 8000). It is wired through the Traefik Helm
@@ -483,7 +462,7 @@ kubectl get gatewayclass
 kubectl get svc traefik -n traefik
 ```
 
-> The external IP should match the reserved static IP. Report it into `cluster/env.azure`,
+> The external IP should match the reserved static IP. Report it into `cluster/k8s/.env.azure`,
 > then render and apply the HTTPRoute templates as in the Minikube setup.
 
 ---
@@ -491,9 +470,9 @@ kubectl get svc traefik -n traefik
 ## Deploy cluster
 
 ```bash
-# Load env vars (GATEWAY_IP, BACKEND_IMAGE, FRONTEND_IMAGE, IMAGE_PULL_POLICY)
+# Load env vars (DOMAIN, BACKEND_IMAGE, FRONTEND_IMAGE, IMAGE_PULL_POLICY)
 # required by envsubst for the templated manifests below
-source cluster/env.azure
+source cluster/k8s/.env.azure
 ```
 
 ```bash

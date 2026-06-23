@@ -8,7 +8,7 @@ spec:
     - name: pool-gateway
   hostnames:
     # GATEWAY_IP is substituted at deploy time, see cluster/env.azure or cluster/env.local
-    - "api.${GATEWAY_IP}.nip.io"
+    - "api.${DOMAIN}"
   rules:
     - matches:
         - path:

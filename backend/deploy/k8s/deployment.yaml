@@ -14,6 +14,8 @@ spec:
         app: backend
     spec:
       automountServiceAccountToken: false
+      #imagePullSecrets:
+        #- name: ghcr-pull
       initContainers:
         - name: db-init
           image: ${BACKEND_IMAGE}
@@ -21,7 +23,7 @@ spec:
           command:
             - sh
             - -c
-            - "npx prisma migrate deploy && npx prisma db seed"
+            - "npx prisma migrate deploy && node dist/src/seed.js"
           envFrom:
             - secretRef:
                 name: backend-secret

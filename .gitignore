@@ -1,5 +1,7 @@
-**/deploy/k8s/secret*.yaml
+**/secret*.yaml
+!**/secret*.example.yaml
 
 **/.terraform/
 **/*.tfstate
 **/*.tfstate.backup
+**/*.tfvars
