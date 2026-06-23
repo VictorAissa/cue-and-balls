@@ -69,10 +69,10 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
             client.emit('room_joined', gameState);
 
-            // game_started is emitted when both players are in the room
-            const sockets = await this.server.in(gameId).fetchSockets();
-            if (sockets.length === 2) {
-                this.gamesService.clearWebsocketStartTimeout(gameId);
+            // Start the match when two distinct players are actually connected to the room.
+            const connectedPlayerIds = await this.getConnectedPlayerIds(gameId);
+            if (gameState.game.status === 'WAITING' && connectedPlayerIds.size === 2) {
+                await this.gamesService.startGame(gameId);
                 const turnPlayer = gameState.gamePlayers.find((gp) => gp.isTurn);
                 this.server.to(gameId).emit('game_started', {
                     firstTurnPlayerId: turnPlayer?.player.id ?? gameState.gamePlayers[0].player.id,
@@ -95,12 +95,21 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
             return;
         }
 
+        const connectedPlayerIds = await this.getConnectedPlayerIds(gameId);
+        if (connectedPlayerIds.has(playerId)) {
+            return;
+        }
+
         this.server.to(gameId).emit('player_left', { playerId });
 
         const timer = setTimeout(async () => {
             this.reconnectionTimers.delete(playerId);
             const latestStatus = await this.gamesService.getGameStatus(gameId);
             if (!latestStatus || !['WAITING', 'ONGOING', 'PAUSED'].includes(latestStatus)) {
+                return;
+            }
+            const connectedPlayerIds = await this.getConnectedPlayerIds(gameId);
+            if (connectedPlayerIds.has(playerId)) {
                 return;
             }
             const opponent = await this.gamesService.findOpponent(gameId, playerId);
@@ -232,5 +241,14 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private async findOpponentSocket(gameId: string, playerId: string): Promise<Socket | undefined> {
         const sockets = await this.server.in(gameId).fetchSockets();
         return sockets.find((s) => (s as unknown as AuthenticatedSocket).playerId !== playerId) as Socket | undefined;
+    }
+
+    private async getConnectedPlayerIds(gameId: string): Promise<Set<string>> {
+        const sockets = await this.server.in(gameId).fetchSockets();
+        return new Set(
+            sockets
+                .map((socket) => (socket as unknown as AuthenticatedSocket).playerId)
+                .filter((playerId): playerId is string => Boolean(playerId)),
+        );
     }
 }

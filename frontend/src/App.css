@@ -142,12 +142,6 @@ body {
     color: var(--danger);
   }
 
-  .app-feedback.placeholder {
-    border-color: rgba(245, 158, 11, 0.24);
-    background: rgba(255, 248, 220, 0.94);
-    color: rgb(120 53 15 / 1);
-  }
-
   .menu-toggle {
     @apply inline-flex h-10 w-10 flex-col items-center justify-center gap-1.5 rounded-xl transition;
     background: rgba(255, 255, 255, 0.06);
@@ -253,11 +247,6 @@ body {
     border: 1px solid var(--line-strong);
     box-shadow: var(--shadow-lg);
     backdrop-filter: blur(10px);
-  }
-
-  .lobby-card.placeholder {
-    border-style: dashed;
-    background: rgba(255, 252, 242, 0.96);
   }
 
   .lobby-create-card {

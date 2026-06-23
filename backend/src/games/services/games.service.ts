@@ -5,7 +5,6 @@ import { CUE_BALL_SPAWN, RACK_POSITIONS } from '../constants/rack-positions';
 import { ListGamesDto } from '../dto/list-games.dto';
 
 const ACTIVE_GAME_STATUSES: GameStatus[] = [GameStatus.WAITING, GameStatus.ONGOING, GameStatus.PAUSED];
-const GAME_START_WS_TTL_MS = 90_000;
 
 const GAME_DETAIL_INCLUDE = {
     gamePlayers: {
@@ -26,19 +25,17 @@ const GAME_DETAIL_INCLUDE = {
 
 @Injectable()
 export class GamesService {
-    private readonly websocketStartTimers = new Map<string, NodeJS.Timeout>();
-
     constructor(private readonly prisma: PrismaService) {}
 
     /**
      * Creates a new WAITING game and registers the caller as the first GamePlayer.
-     * Throws 400 if the player is already in an active game.
+     * If the player is already in active games, they are abandoned first.
      *
      * @param playerId - ID of the authenticated player
      * @returns the created game ID
      */
     async createGame(playerId: string): Promise<{ id: string }> {
-        await this.assertPlayerNotInActiveGame(playerId);
+        await this.abandonActiveGamesForPlayer(playerId);
 
         const game = await this.prisma.game.create({
             data: {
@@ -54,9 +51,10 @@ export class GamesService {
 
     /**
      * Joins an existing WAITING game as the second player.
-     * Transitions the game to ONGOING and initializes the 16 GameBalls at rack positions.
+     * Initializes the 16 GameBalls at rack positions.
+     * The game starts only once both players are connected to the websocket room.
      * Throws 404 if the game does not exist.
-     * Throws 400 if the game is not WAITING, already full, or the player is in another active game.
+     * Throws 400 if the game is not WAITING or already full.
      * Throws 409 if the player is already a participant of this game.
      *
      * @param gameId - ID of the game to join
@@ -76,7 +74,7 @@ export class GamesService {
 
         if (game.gamePlayers.length >= 2) throw new BadRequestException('GAME_FULL');
 
-        await this.assertPlayerNotInActiveGame(playerId);
+        await this.abandonActiveGamesForPlayer(playerId, gameId);
 
         const balls = await this.prisma.ball.findMany({ select: { id: true, number: true } });
         const allPositions = [CUE_BALL_SPAWN, ...RACK_POSITIONS];
@@ -100,13 +98,7 @@ export class GamesService {
                 where: { gameId, playerId: { not: playerId } },
                 data: { isTurn: true },
             }),
-            this.prisma.game.update({
-                where: { id: gameId },
-                data: { status: GameStatus.ONGOING },
-            }),
         ]);
-
-        this.scheduleWebsocketStartTimeout(gameId);
     }
 
     /**
@@ -195,10 +187,16 @@ export class GamesService {
      * @param gameId - ID of the game to abandon
      */
     async abandonGame(gameId: string): Promise<void> {
-        this.clearWebsocketStartTimeout(gameId);
         await this.prisma.game.update({
             where: { id: gameId },
             data: { status: GameStatus.ABANDONED },
+        });
+    }
+
+    async startGame(gameId: string): Promise<void> {
+        await this.prisma.game.update({
+            where: { id: gameId },
+            data: { status: GameStatus.ONGOING },
         });
     }
 
@@ -209,31 +207,6 @@ export class GamesService {
         });
 
         return game?.status ?? null;
-    }
-
-    clearWebsocketStartTimeout(gameId: string): void {
-        const timer = this.websocketStartTimers.get(gameId);
-        if (!timer) {
-            return;
-        }
-
-        clearTimeout(timer);
-        this.websocketStartTimers.delete(gameId);
-    }
-
-    private scheduleWebsocketStartTimeout(gameId: string): void {
-        this.clearWebsocketStartTimeout(gameId);
-
-        const timer = setTimeout(async () => {
-            this.websocketStartTimers.delete(gameId);
-
-            const status = await this.getGameStatus(gameId);
-            if (status === GameStatus.ONGOING) {
-                await this.abandonGame(gameId);
-            }
-        }, GAME_START_WS_TTL_MS);
-
-        this.websocketStartTimers.set(gameId, timer);
     }
 
     /**
@@ -308,14 +281,28 @@ export class GamesService {
         };
     }
 
-    private async assertPlayerNotInActiveGame(playerId: string): Promise<void> {
-        const existing = await this.prisma.gamePlayer.findFirst({
+    private async abandonActiveGamesForPlayer(playerId: string, excludeGameId?: string): Promise<void> {
+        const existing = await this.prisma.gamePlayer.findMany({
             where: {
                 playerId,
-                game: { status: { in: ACTIVE_GAME_STATUSES } },
+                game: {
+                    status: { in: ACTIVE_GAME_STATUSES },
+                    ...(excludeGameId ? { id: { not: excludeGameId } } : {}),
+                },
             },
+            select: { gameId: true },
         });
 
-        if (existing) throw new BadRequestException('PLAYER_ALREADY_IN_GAME');
+        if (existing.length === 0) {
+            return;
+        }
+
+        await this.prisma.game.updateMany({
+            where: {
+                id: { in: existing.map((entry) => entry.gameId) },
+                status: { in: ACTIVE_GAME_STATUSES },
+            },
+            data: { status: GameStatus.ABANDONED },
+        });
     }
 }

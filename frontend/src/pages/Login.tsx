@@ -123,7 +123,7 @@ export default function Login() {
             <div className="app-feedback info mt-6">
               <p className="font-semibold">Compte cree</p>
               <p className="mt-1">
-                Utilisez l&apos;email <span className="font-semibold">{registeredIdentity.email}</span> pour terminer la phase 1.
+                Connectez-vous avec l&apos;email <span className="font-semibold">{registeredIdentity.email}</span> pour acceder a votre espace joueur.
               </p>
             </div>
           )}

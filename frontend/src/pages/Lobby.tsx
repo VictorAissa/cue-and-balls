@@ -1,5 +1,5 @@
 import { useEffect, useEffectEvent, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Navigate, useNavigate } from 'react-router-dom'
 import { API_BASE_URL } from '../lib/api'
 
 type Player = {
@@ -26,24 +26,6 @@ type CreateGameResponse = {
   id: string
 }
 
-const placeholderLobby: GameSummary = {
-  game: {
-    id: 'placeholder-game-waiting',
-    status: 'WAITING',
-    createdAt: new Date('2026-06-08T10:00:00Z').toISOString(),
-    updatedAt: new Date('2026-06-08T10:00:00Z').toISOString(),
-  },
-  players: [
-    {
-      id: 'placeholder-player-1',
-      username: 'TableMaster',
-      email: 'tablemaster@cueandballs.dev',
-      avatar: null,
-      createdAt: new Date('2026-06-01T08:00:00Z').toISOString(),
-    },
-  ],
-}
-
 function formatDate(date: string) {
   return new Intl.DateTimeFormat('fr-FR', {
     dateStyle: 'medium',
@@ -66,16 +48,13 @@ export default function Lobby() {
   const waitingGamesEndpoint = `${API_BASE_URL}/games?status=WAITING`
   const createGameEndpoint = `${API_BASE_URL}/games`
 
+  if (!token) {
+    return <Navigate to="/" replace />
+  }
+
   async function fetchWaitingGames() {
     setIsLoading(true)
     setFetchError(null)
-
-    if (!token) {
-      setGames([])
-      setFetchError('Connectez-vous pour recuperer les parties en attente.')
-      setIsLoading(false)
-      return
-    }
 
     try {
       const response = await fetch(waitingGamesEndpoint, {
@@ -271,8 +250,6 @@ export default function Lobby() {
     }
   }
 
-  const displayedGames = games.length > 0 ? games : [placeholderLobby]
-
   return (
     <main className="app-page">
       <section className="mx-auto max-w-6xl">
@@ -382,40 +359,36 @@ export default function Lobby() {
           )}
 
           {!fetchError && isLoading && (
-            <div className="app-feedback success">
+            <div className="app-feedback info">
               <p className="font-semibold">Chargement</p>
               <p className="mt-1">Recuperation des parties WAITING en cours.</p>
             </div>
           )}
 
-          {games.length === 0 && (
-            <div className="app-feedback placeholder">
-              <p className="font-semibold">Apercu placeholder</p>
+          {!fetchError && !isLoading && games.length === 0 && (
+            <div className="app-feedback info">
+              <p className="font-semibold">Aucune partie en attente</p>
               <p className="mt-1">
-                Aucun backend exploitable pour le moment, donc une carte d&apos;attente
-                fictive est affichee ci-dessous pour valider le rendu.
+                Aucune table n&apos;est disponible pour le moment. Creez une partie ou revenez dans quelques instants.
               </p>
             </div>
           )}
         </div>
 
+        {games.length > 0 && (
         <div className="grid gap-4 md:grid-cols-2">
-          {displayedGames.map((summary) => {
+          {games.map((summary) => {
             const openSlots = Math.max(0, 2 - summary.players.length)
-            const isPlaceholder = summary.game.id === placeholderLobby.game.id
 
             return (
               <article
                 key={summary.game.id}
-                className={`lobby-card ${isPlaceholder ? 'placeholder' : ''}`}
+                className="lobby-card"
               >
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <div className="flex items-center gap-3">
                       <span className="status-pill pending">{summary.game.status}</span>
-                      {isPlaceholder && (
-                        <span className="status-pill success">Apercu</span>
-                      )}
                     </div>
 
                     <h2 className="mt-4 text-2xl font-black tracking-tight text-zinc-900">
@@ -429,7 +402,6 @@ export default function Lobby() {
                   <button
                     type="button"
                     className="app-button-secondary w-full sm:w-auto"
-                    disabled={isPlaceholder}
                     onClick={() => void handleJoinGame(summary.game.id)}
                   >
                     Rejoindre
@@ -463,6 +435,7 @@ export default function Lobby() {
             )
           })}
         </div>
+        )}
       </section>
     </main>
   )

@@ -21,7 +21,7 @@ export default function Header({ onMenuToggle }: HeaderProps) {
           <span />
         </button>
 
-        <NavLink to="/">
+        <NavLink to="/lobby">
           <img className="h-12 drop-shadow" src={logo} alt="Cue & Balls Logo" />
         </NavLink>
 
