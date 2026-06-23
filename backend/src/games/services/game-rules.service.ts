@@ -35,12 +35,28 @@ export class GameRulesService {
         opponentId: string,
         pocketedNumbers: number[],
         isFoul: boolean,
+        shooterBallType: BallType | null,
+        ballTypesAssigned: BallTypesAssigned | null,
     ): string {
         if (isFoul) return opponentId;
 
         const legalPockets = pocketedNumbers.filter((n) => n !== CUE_BALL_NUMBER && n !== EIGHT_BALL_NUMBER);
+        if (legalPockets.length === 0) {
+            return opponentId;
+        }
 
-        return legalPockets.length > 0 ? shooterId : opponentId;
+        if (ballTypesAssigned) {
+            return shooterId;
+        }
+
+        if (!shooterBallType) {
+            return shooterId;
+        }
+
+        const shooterBallNumbers = shooterBallType === BallType.SOLIDS ? SOLIDS_NUMBERS : STRIPES_NUMBERS;
+        const pocketedOwnBall = legalPockets.some((number) => shooterBallNumbers.includes(number));
+
+        return pocketedOwnBall ? shooterId : opponentId;
     }
 
     /**

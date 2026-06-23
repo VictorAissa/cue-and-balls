@@ -17,6 +17,8 @@ import {
 import {
   ballTextureUrls,
   metalTextureUrl,
+  railClothTextureUrl,
+  tableClothTextureUrl,
   woodTextureUrl,
 } from './gameTestAssets'
 import type {
@@ -56,18 +58,25 @@ const TABLE: TableGeometry = {
 
 const BALL_DIAMETER = TABLE.ballRadius * 2
 const BALL_OVERLAY_SIZE = BALL_DIAMETER
-const TABLE_CLOTH_COLOR = 0x12492f
+const TABLE_MARK_COLOR = 0x175e34
+const TABLE_MARK_RADIUS = TABLE.ballRadius * 0.3
 const MAX_AIM_LENGTH = 210
 const MIN_SHOT_DISTANCE = 14
-const SHOT_POWER = 0.092
+const SHOT_POWER = 0.098
 const MAX_SHOT_SPEED = MAX_AIM_LENGTH * SHOT_POWER
-const FRICTION = 0.989
+const FRICTION = 0.990
 const STOP_EPSILON = 0.03
 const RAIL_BOUNCE = 0.96
 const BALL_COLLISION_DAMPING = 0.992
 const TILE_TRAVEL_SCALE = 1.45
 const MICRO_TILE_SIZE = 64
 const POCKET_SHRINK_DURATION = 0.2
+const LEGACY_SIMULATION_FPS = 60
+const FIXED_TIMESTEP_SECONDS = 1 / 120
+const FIXED_TIMESTEP_MS = FIXED_TIMESTEP_SECONDS * 1000
+const MAX_FRAME_CATCH_UP_MS = 250
+const MAX_SHOT_SPEED_PER_SECOND = MAX_SHOT_SPEED * LEGACY_SIMULATION_FPS
+const STOP_EPSILON_PER_SECOND = STOP_EPSILON * LEGACY_SIMULATION_FPS
 
 const BALL_COLORS: Record<number, number> = {
   0: 0xf4efdf,
@@ -91,7 +100,6 @@ const BALL_COLORS: Record<number, number> = {
 type GameStageProps = {
   balls: GameBall[]
   canShoot: boolean
-  statusLabel: string
   onShoot: (payload: ShotPayload) => void
   onShotResolved: (payload: ShotResolvedPayload) => void
 }
@@ -120,7 +128,10 @@ function getBallKind(number: number): BallKind {
 }
 
 function isBallMoving(ball: LocalBallState) {
-  return Math.abs(ball.vx) > STOP_EPSILON || Math.abs(ball.vy) > STOP_EPSILON
+  return (
+    Math.abs(ball.vx) > STOP_EPSILON_PER_SECOND ||
+    Math.abs(ball.vy) > STOP_EPSILON_PER_SECOND
+  )
 }
 
 function areBallsStopped(balls: LocalBallState[]) {
@@ -279,7 +290,7 @@ function syncBallVisual(ball: LocalBallState) {
 function resetBallTextureMotion(ball: LocalBallState) {
   ball.visual.tileOffsetX = 0
   ball.visual.tileOffsetY = 0
-  ball.visual.pocketAnimationTime = 0
+  ball.visual.pocketAnimationTime = ball.isPocketed ? POCKET_SHRINK_DURATION : 0
   syncBallVisual(ball)
 }
 
@@ -331,16 +342,21 @@ function getShotPayload(fromX: number, fromY: number, toX: number, toY: number) 
 }
 
 function setVelocityFromShot(ball: LocalBallState, payload: ShotPayload) {
-  const speed = Math.min(payload.power * MAX_AIM_LENGTH * SHOT_POWER, MAX_SHOT_SPEED)
+  const speed = Math.min(
+    payload.power * MAX_AIM_LENGTH * SHOT_POWER * LEGACY_SIMULATION_FPS,
+    MAX_SHOT_SPEED_PER_SECOND,
+  )
   ball.vx = Math.cos(payload.angle) * speed
   ball.vy = Math.sin(payload.angle) * speed
 }
 
-function buildResolvedPayload(balls: LocalBallState[]) {
-  const pocketedNumbers = balls
-    .filter((ball) => ball.isPocketed)
-    .map((ball) => ball.number)
-    .sort((left, right) => left - right)
+function buildResolvedPayload(
+  balls: LocalBallState[],
+  pocketedThisShot: Set<number>,
+) {
+  const pocketedNumbers = Array.from(pocketedThisShot).sort(
+    (left, right) => left - right,
+  )
 
   const finalPositions = balls
     .filter((ball) => !ball.isPocketed)
@@ -358,34 +374,55 @@ function buildResolvedPayload(balls: LocalBallState[]) {
 }
 
 export default forwardRef<GameStageHandle, GameStageProps>(function GameStage(
-  { balls: authoritativeBalls, canShoot, statusLabel, onShoot, onShotResolved },
+  {
+    balls: authoritativeBalls,
+    canShoot,
+    onShoot,
+    onShotResolved,
+  },
   ref,
 ) {
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const stageReadyRef = useRef(false)
+  const pendingAuthoritativeStateRef = useRef<GameBall[]>(authoritativeBalls)
+  const pendingShotResultRef = useRef<ShotResolvedPayload | null>(null)
+  const pendingRemoteShotRef = useRef<ShotPayload | null>(null)
   const methodsRef = useRef<GameStageHandle>({
-    applyAuthoritativeState: () => {},
-    applyShotResult: () => {},
-    playRemoteShot: () => {},
+    applyAuthoritativeState: (nextBalls) => {
+      pendingAuthoritativeStateRef.current = nextBalls
+    },
+    applyShotResult: (payload) => {
+      pendingShotResultRef.current = payload
+    },
+    playRemoteShot: (payload) => {
+      pendingRemoteShotRef.current = payload
+    },
   })
   const authoritativeBallsRef = useRef(authoritativeBalls)
   const canShootRef = useRef(canShoot)
-  const statusLabelRef = useRef(statusLabel)
   const onShootRef = useRef(onShoot)
   const onShotResolvedRef = useRef(onShotResolved)
 
-  useImperativeHandle(ref, () => methodsRef.current, [])
+  useImperativeHandle(
+    ref,
+    () => ({
+      applyAuthoritativeState: (nextBalls) =>
+        methodsRef.current.applyAuthoritativeState(nextBalls),
+      applyShotResult: (payload) => methodsRef.current.applyShotResult(payload),
+      playRemoteShot: (payload) => methodsRef.current.playRemoteShot(payload),
+    }),
+    [],
+  )
 
   useEffect(() => {
     authoritativeBallsRef.current = authoritativeBalls
+    pendingAuthoritativeStateRef.current = authoritativeBalls
+    methodsRef.current.applyAuthoritativeState(authoritativeBalls)
   }, [authoritativeBalls])
 
   useEffect(() => {
     canShootRef.current = canShoot
   }, [canShoot])
-
-  useEffect(() => {
-    statusLabelRef.current = statusLabel
-  }, [statusLabel])
 
   useEffect(() => {
     onShootRef.current = onShoot
@@ -409,6 +446,7 @@ export default forwardRef<GameStageHandle, GameStageProps>(function GameStage(
     let cueBall: LocalBallState | null = null
     let cueRespawnPending = false
     let activeShotSource: 'local' | 'remote' | null = null
+    let pocketedThisShot = new Set<number>()
     const cleanupFns: Array<() => void> = []
 
     const mount = async () => {
@@ -416,8 +454,7 @@ export default forwardRef<GameStageHandle, GameStageProps>(function GameStage(
       await pixi.init({
         antialias: true,
         autoDensity: true,
-        background: '#0b1a11',
-        backgroundAlpha: 1,
+        backgroundAlpha: 0,
         resizeTo: host,
       })
 
@@ -430,9 +467,17 @@ export default forwardRef<GameStageHandle, GameStageProps>(function GameStage(
       appCanvas = pixi.canvas
       host.appendChild(pixi.canvas)
 
-      const [metalTexture, woodTexture, loadedBallTextures] = await Promise.all([
+      const [
+        metalTexture,
+        woodTexture,
+        tableClothTexture,
+        railClothTexture,
+        loadedBallTextures,
+      ] = await Promise.all([
         Assets.load<Texture>(metalTextureUrl),
         Assets.load<Texture>(woodTextureUrl),
+        Assets.load<Texture>(tableClothTextureUrl),
+        Assets.load<Texture>(railClothTextureUrl),
         Promise.all(
           Object.entries(ballTextureUrls).map(async ([number, assetUrl]) => {
             const texture = await Assets.load<Texture>(assetUrl)
@@ -448,6 +493,8 @@ export default forwardRef<GameStageHandle, GameStageProps>(function GameStage(
 
       configureTexture(metalTexture, 'linear', 'repeat')
       configureTexture(woodTexture, 'linear', 'repeat')
+      configureTexture(tableClothTexture, 'linear', 'repeat')
+      configureTexture(railClothTexture, 'linear', 'repeat')
       const ballTextures = new Map<number, Texture>()
       loadedBallTextures.forEach(([number, texture]) => {
         configureTexture(texture, 'linear')
@@ -466,15 +513,25 @@ export default forwardRef<GameStageHandle, GameStageProps>(function GameStage(
       world.addChild(tableLayer, ballLayer, overlayLayer)
       app.stage.addChild(world)
 
-      const cloth = new Graphics()
-      cloth.roundRect(
+      const cloth = new TilingSprite({
+        texture: tableClothTexture,
+        width: TABLE.playWidth,
+        height: TABLE.playHeight,
+      })
+      cloth.x = TABLE.playX
+      cloth.y = TABLE.playY
+      cloth.tileScale.set(0.65)
+
+      const clothMask = new Graphics()
+      clothMask.roundRect(
         TABLE.playX,
         TABLE.playY,
         TABLE.playWidth,
         TABLE.playHeight,
         26,
       )
-      cloth.fill({ color: TABLE_CLOTH_COLOR })
+      clothMask.fill({ color: 0xffffff })
+      cloth.mask = clothMask
 
       const frameOuterTexture = new TilingSprite({
         texture: metalTexture,
@@ -502,16 +559,35 @@ export default forwardRef<GameStageHandle, GameStageProps>(function GameStage(
       frameInnerMask.fill({ color: 0xffffff })
       frameInnerTexture.mask = frameInnerMask
 
-      const rails = new Graphics()
-      rails.roundRect(
+      const rails = new TilingSprite({
+        texture: railClothTexture,
+        width: TABLE.playWidth + 44,
+        height: TABLE.playHeight + 44,
+      })
+      rails.x = TABLE.playX - 22
+      rails.y = TABLE.playY - 22
+      rails.tileScale.set(0.55)
+
+      const railsMask = new Graphics()
+      railsMask.roundRect(
         TABLE.playX - 22,
         TABLE.playY - 22,
         TABLE.playWidth + 44,
         TABLE.playHeight + 44,
         28,
       )
-      rails.fill({ color: TABLE_CLOTH_COLOR })
-      rails.stroke({ color: 0x08281a, width: 4, alpha: 0.68 })
+      railsMask.fill({ color: 0xffffff })
+      rails.mask = railsMask
+
+      const railsOutline = new Graphics()
+      railsOutline.roundRect(
+        TABLE.playX - 22,
+        TABLE.playY - 22,
+        TABLE.playWidth + 44,
+        TABLE.playHeight + 44,
+        28,
+      )
+      railsOutline.stroke({ color: 0x08281a, width: 4, alpha: 0.68 })
 
       const pocketGraphics = new Graphics()
       TABLE.pockets.forEach((pocket) => {
@@ -520,6 +596,11 @@ export default forwardRef<GameStageHandle, GameStageProps>(function GameStage(
         pocketGraphics.circle(pocket.x, pocket.y, pocket.radius)
         pocketGraphics.fill({ color: 0x0d0b0a })
       })
+
+      const cueSpawnMark = new Graphics()
+      cueSpawnMark.circle(TABLE.cueSpawn.x, TABLE.cueSpawn.y, TABLE_MARK_RADIUS)
+      cueSpawnMark.fill({ color: TABLE_MARK_COLOR, alpha: 0.95 })
+      cueSpawnMark.stroke({ color: 0xf6ead0, width: 1, alpha: 0.28 })
 
       const playMask = new Graphics()
       playMask.roundRect(
@@ -532,17 +613,6 @@ export default forwardRef<GameStageHandle, GameStageProps>(function GameStage(
       playMask.fill({ color: 0xffffff })
 
       const cueGuide = new Graphics()
-      const statusText = new Text({
-        text: '',
-        style: {
-          fill: '#f6ead0',
-          fontFamily: 'system-ui',
-          fontSize: 22,
-          fontWeight: '700',
-        },
-      })
-      statusText.x = TABLE.playX + 18
-      statusText.y = TABLE.playY + 18
 
       tableLayer.addChild(
         frameOuterTexture,
@@ -550,11 +620,15 @@ export default forwardRef<GameStageHandle, GameStageProps>(function GameStage(
         frameInnerTexture,
         frameInnerMask,
         rails,
+        railsMask,
+        railsOutline,
         playMask,
         cloth,
+        clothMask,
+        cueSpawnMark,
         pocketGraphics,
       )
-      overlayLayer.addChild(cueGuide, statusText)
+      overlayLayer.addChild(cueGuide)
 
       function createBallVisual(number: number, x: number, y: number) {
         const kind = getBallKind(number)
@@ -678,58 +752,46 @@ export default forwardRef<GameStageHandle, GameStageProps>(function GameStage(
         })
       }
 
-      function updateStatus() {
-        if (dragActive) {
-          statusText.text = 'Reglez la direction et la puissance'
-          return
-        }
-
-        if (cueRespawnPending) {
-          statusText.text = 'La blanche revient a sa position'
-          return
-        }
-
-        if (activeShotSource === 'remote' && !areBallsStopped(balls)) {
-          statusText.text = 'Simulation adverse en cours'
-          return
-        }
-
-        if (activeShotSource === 'local' && !areBallsStopped(balls)) {
-          statusText.text = 'Votre tir est en cours'
-          return
-        }
-
-        statusText.text = statusLabelRef.current
-      }
-
       function applyAuthoritativeState(nextBalls: GameBall[]) {
+        console.log('[GameStage] applyAuthoritativeState', {
+          ballCount: nextBalls.length,
+          pocketed: nextBalls
+            .filter((ball) => ball.isPocketed)
+            .map((ball) => ball.ball.number)
+            .sort((left, right) => left - right),
+        })
+
         destroyBallVisuals()
         balls = nextBalls.map((ball) => createBall(ball))
         cueBall = balls.find((ball) => ball.number === 0) ?? null
         cueRespawnPending = false
         activeShotSource = null
+        pocketedThisShot = new Set()
         clearAimGuide()
         balls.forEach((ball) => resetBallTextureMotion(ball))
         syncSprites()
-        updateStatus()
       }
 
       function applyShotResult(payload: ShotResolvedPayload) {
+        console.log('[GameStage] applyShotResult', payload)
+
         const pocketedNumbers = new Set(payload.pocketedNumbers)
         const positionsByNumber = new Map(
           payload.finalPositions.map((position) => [position.number, position]),
         )
 
         balls.forEach((ball) => {
+          const alreadyPocketed = ball.isPocketed
           ball.vx = 0
           ball.vy = 0
-          ball.isPocketed = pocketedNumbers.has(ball.number)
 
           const authoritativePosition = positionsByNumber.get(ball.number)
           if (authoritativePosition) {
             ball.x = fromNormalizedX(authoritativePosition.x)
             ball.y = fromNormalizedY(authoritativePosition.y)
             ball.isPocketed = false
+          } else {
+            ball.isPocketed = alreadyPocketed || pocketedNumbers.has(ball.number)
           }
 
           resetBallTextureMotion(ball)
@@ -737,8 +799,8 @@ export default forwardRef<GameStageHandle, GameStageProps>(function GameStage(
 
         cueRespawnPending = false
         activeShotSource = null
+        pocketedThisShot = new Set()
         syncSprites()
-        updateStatus()
       }
 
       function respawnCueBall() {
@@ -789,12 +851,23 @@ export default forwardRef<GameStageHandle, GameStageProps>(function GameStage(
       }
 
       function pocketBall(ball: LocalBallState, pocket: TablePocket) {
+        console.log('[GameStage] pocketBall', {
+          activeShotSource,
+          number: ball.number,
+          pocketX: pocket.x,
+          pocketY: pocket.y,
+        })
+
         ball.isPocketed = true
         ball.vx = 0
         ball.vy = 0
         ball.x = pocket.x
         ball.y = pocket.y
         ball.visual.pocketAnimationTime = 0
+
+        if (activeShotSource) {
+          pocketedThisShot.add(ball.number)
+        }
 
         if (ball.kind === 'cue') {
           cueRespawnPending = true
@@ -904,29 +977,29 @@ export default forwardRef<GameStageHandle, GameStageProps>(function GameStage(
         })
       }
 
-      function applyPhysics(deltaTime: number, deltaSeconds: number) {
-        const step = Math.min(deltaTime, 2)
+      function applyPhysicsStep(stepSeconds: number) {
+        const frictionFactor = FRICTION ** (stepSeconds * 60)
 
         balls.forEach((ball) => {
           if (ball.isPocketed) {
             return
           }
 
-          const nextDeltaX = ball.vx * step
-          const nextDeltaY = ball.vy * step
+          const nextDeltaX = ball.vx * stepSeconds
+          const nextDeltaY = ball.vy * stepSeconds
 
           ball.x += nextDeltaX
           ball.y += nextDeltaY
           updateBallTextureMotion(ball, nextDeltaX, nextDeltaY)
 
-          ball.vx *= FRICTION ** step
-          ball.vy *= FRICTION ** step
+          ball.vx *= frictionFactor
+          ball.vy *= frictionFactor
 
-          if (Math.abs(ball.vx) < STOP_EPSILON) {
+          if (Math.abs(ball.vx) < STOP_EPSILON_PER_SECOND) {
             ball.vx = 0
           }
 
-          if (Math.abs(ball.vy) < STOP_EPSILON) {
+          if (Math.abs(ball.vy) < STOP_EPSILON_PER_SECOND) {
             ball.vy = 0
           }
 
@@ -935,23 +1008,32 @@ export default forwardRef<GameStageHandle, GameStageProps>(function GameStage(
 
         resolveBallCollisions()
         resolvePockets()
-        updatePocketAnimations(deltaSeconds)
+        updatePocketAnimations(stepSeconds)
 
         if (cueRespawnPending && areBallsStopped(balls)) {
           respawnCueBall()
         }
 
         if (activeShotSource === 'local' && areBallsStopped(balls)) {
+          console.log('[GameStage] local simulation finished', {
+            pocketedThisShot: Array.from(pocketedThisShot).sort((left, right) => left - right),
+          })
+
           activeShotSource = null
-          onShotResolvedRef.current(buildResolvedPayload(balls))
+          onShotResolvedRef.current(buildResolvedPayload(balls, pocketedThisShot))
+          pocketedThisShot = new Set()
         }
 
         if (activeShotSource === 'remote' && areBallsStopped(balls)) {
+          console.log('[GameStage] remote simulation finished', {
+            pocketedThisShot: Array.from(pocketedThisShot).sort((left, right) => left - right),
+          })
+
           activeShotSource = null
+          pocketedThisShot = new Set()
         }
 
         syncSprites()
-        updateStatus()
       }
 
       function resizeWorld() {
@@ -1002,7 +1084,6 @@ export default forwardRef<GameStageHandle, GameStageProps>(function GameStage(
 
         dragActive = true
         drawAimGuide(point.x, point.y)
-        updateStatus()
       }
 
       function handlePointerMove(event: PointerEvent) {
@@ -1016,15 +1097,26 @@ export default forwardRef<GameStageHandle, GameStageProps>(function GameStage(
 
       function startShot(payload: ShotPayload, source: 'local' | 'remote') {
         if (!cueBall) {
+          console.log('[GameStage] startShot skipped: no cueBall', { source, payload })
           return
         }
 
+        console.log('[GameStage] startShot', {
+          source,
+          payload,
+          cueBallBefore: {
+            x: cueBall.x,
+            y: cueBall.y,
+            isPocketed: cueBall.isPocketed,
+          },
+        })
+
         activeShotSource = source
+        pocketedThisShot = new Set()
         cueBall.isPocketed = false
         cueBall.x = fromNormalizedX(payload.cueBallX)
         cueBall.y = fromNormalizedY(payload.cueBallY)
         setVelocityFromShot(cueBall, payload)
-        updateStatus()
       }
 
       function handlePointerUp(event: PointerEvent) {
@@ -1038,25 +1130,83 @@ export default forwardRef<GameStageHandle, GameStageProps>(function GameStage(
 
         const payload = getShotPayload(cueBall.x, cueBall.y, point.x, point.y)
         if (!payload) {
-          updateStatus()
+          console.log('[GameStage] handlePointerUp ignored: invalid payload')
           return
         }
 
+        console.log('[GameStage] handlePointerUp valid payload', payload)
         onShootRef.current(payload)
         startShot(payload, 'local')
       }
 
       methodsRef.current = {
-        applyAuthoritativeState: (nextBalls) => applyAuthoritativeState(nextBalls),
-        applyShotResult: (payload) => applyShotResult(payload),
-        playRemoteShot: (payload) => startShot(payload, 'remote'),
+        applyAuthoritativeState: (nextBalls) => {
+          pendingAuthoritativeStateRef.current = nextBalls
+          if (!stageReadyRef.current) {
+            return
+          }
+
+          applyAuthoritativeState(nextBalls)
+        },
+        applyShotResult: (payload) => {
+          pendingShotResultRef.current = payload
+          if (!stageReadyRef.current) {
+            return
+          }
+
+          applyShotResult(payload)
+          pendingShotResultRef.current = null
+        },
+        playRemoteShot: (payload) => {
+          pendingRemoteShotRef.current = payload
+          if (!stageReadyRef.current) {
+            return
+          }
+
+          startShot(payload, 'remote')
+          pendingRemoteShotRef.current = null
+        },
       }
 
-      applyAuthoritativeState(authoritativeBallsRef.current)
+      stageReadyRef.current = true
+      applyAuthoritativeState(pendingAuthoritativeStateRef.current)
+      if (pendingShotResultRef.current) {
+        applyShotResult(pendingShotResultRef.current)
+        pendingShotResultRef.current = null
+      } else if (pendingRemoteShotRef.current) {
+        startShot(pendingRemoteShotRef.current, 'remote')
+        pendingRemoteShotRef.current = null
+      }
       resizeWorld()
 
-      app.ticker.add((ticker) => {
-        applyPhysics(ticker.deltaTime, ticker.deltaMS / 1000)
+      const activeApp = app
+      let accumulatedStepMs = 0
+      let lastScreenWidth = activeApp.screen.width
+      let lastScreenHeight = activeApp.screen.height
+
+      activeApp.ticker.add((ticker) => {
+        if (
+          activeApp.screen.width !== lastScreenWidth ||
+          activeApp.screen.height !== lastScreenHeight
+        ) {
+          lastScreenWidth = activeApp.screen.width
+          lastScreenHeight = activeApp.screen.height
+          resizeWorld()
+        }
+
+        accumulatedStepMs = Math.min(
+          accumulatedStepMs + ticker.deltaMS,
+          MAX_FRAME_CATCH_UP_MS,
+        )
+
+        while (accumulatedStepMs >= FIXED_TIMESTEP_MS) {
+          applyPhysicsStep(FIXED_TIMESTEP_SECONDS)
+          accumulatedStepMs -= FIXED_TIMESTEP_MS
+        }
+
+        if (accumulatedStepMs > 0) {
+          syncSprites()
+        }
       })
 
       window.addEventListener('resize', resizeWorld)
@@ -1082,6 +1232,7 @@ export default forwardRef<GameStageHandle, GameStageProps>(function GameStage(
 
     return () => {
       disposed = true
+      stageReadyRef.current = false
       cleanupFns.forEach((cleanup) => cleanup())
 
       if (app) {

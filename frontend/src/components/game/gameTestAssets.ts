@@ -17,10 +17,14 @@ import ball15Url from '@assets/Pool Ball Skins/Ball15.jpg'
 import clothUrl from '@assets/seamless-table-cover.png'
 import woodBoardUrl from '@assets/wood_board.png'
 import metalUrl from '@assets/metal.png'
+import tableClothUrl from '@assets/table-cloth.png'
+import railClothUrl from '@assets/rail-cloth.png'
 
 export const clothTextureUrl = clothUrl
 export const woodTextureUrl = woodBoardUrl
 export const metalTextureUrl = metalUrl
+export const tableClothTextureUrl = tableClothUrl
+export const railClothTextureUrl = railClothUrl
 
 export const ballTextureUrls: Record<number, string> = {
   0: cueBallUrl,
