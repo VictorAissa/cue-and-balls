@@ -25,27 +25,26 @@ jobs:
             frontend:
               - 'frontend/**'
 
-  backend-test:
+  test-backend:
     needs: changes
     if: ${{ needs.changes.outputs.backend == 'true' }}
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: "postgresql://user:pass@localhost:5432/db"
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: 'npm'
           cache-dependency-path: backend/package-lock.json
-
       - run: npm ci
         working-directory: backend
-
       - run: npm test
         working-directory: backend
 
   backend:
-    needs: [changes, backend-test]
+    needs: [changes, test-backend]
     if: ${{ needs.changes.outputs.backend == 'true' }}
     runs-on: ubuntu-latest
     permissions:
