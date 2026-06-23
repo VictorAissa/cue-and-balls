@@ -470,7 +470,7 @@ kubectl get svc traefik -n traefik
 ## Deploy cluster
 
 ```bash
-# Load env vars (GATEWAY_IP, BACKEND_IMAGE, FRONTEND_IMAGE, IMAGE_PULL_POLICY)
+# Load env vars (DOMAIN, BACKEND_IMAGE, FRONTEND_IMAGE, IMAGE_PULL_POLICY)
 # required by envsubst for the templated manifests below
 source cluster/k8s/.env.azure
 ```
