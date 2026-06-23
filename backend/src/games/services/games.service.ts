@@ -5,6 +5,7 @@ import { CUE_BALL_SPAWN, RACK_POSITIONS } from '../constants/rack-positions';
 import { ListGamesDto } from '../dto/list-games.dto';
 
 const ACTIVE_GAME_STATUSES: GameStatus[] = [GameStatus.WAITING, GameStatus.ONGOING, GameStatus.PAUSED];
+const GAME_START_WS_TTL_MS = 90_000;
 
 const GAME_DETAIL_INCLUDE = {
     gamePlayers: {
@@ -25,6 +26,8 @@ const GAME_DETAIL_INCLUDE = {
 
 @Injectable()
 export class GamesService {
+    private readonly websocketStartTimers = new Map<string, NodeJS.Timeout>();
+
     constructor(private readonly prisma: PrismaService) {}
 
     /**
@@ -102,6 +105,8 @@ export class GamesService {
                 data: { status: GameStatus.ONGOING },
             }),
         ]);
+
+        this.scheduleWebsocketStartTimeout(gameId);
     }
 
     /**
@@ -190,10 +195,45 @@ export class GamesService {
      * @param gameId - ID of the game to abandon
      */
     async abandonGame(gameId: string): Promise<void> {
+        this.clearWebsocketStartTimeout(gameId);
         await this.prisma.game.update({
             where: { id: gameId },
             data: { status: GameStatus.ABANDONED },
         });
+    }
+
+    async getGameStatus(gameId: string): Promise<GameStatus | null> {
+        const game = await this.prisma.game.findUnique({
+            where: { id: gameId },
+            select: { status: true },
+        });
+
+        return game?.status ?? null;
+    }
+
+    clearWebsocketStartTimeout(gameId: string): void {
+        const timer = this.websocketStartTimers.get(gameId);
+        if (!timer) {
+            return;
+        }
+
+        clearTimeout(timer);
+        this.websocketStartTimers.delete(gameId);
+    }
+
+    private scheduleWebsocketStartTimeout(gameId: string): void {
+        this.clearWebsocketStartTimeout(gameId);
+
+        const timer = setTimeout(async () => {
+            this.websocketStartTimers.delete(gameId);
+
+            const status = await this.getGameStatus(gameId);
+            if (status === GameStatus.ONGOING) {
+                await this.abandonGame(gameId);
+            }
+        }, GAME_START_WS_TTL_MS);
+
+        this.websocketStartTimers.set(gameId, timer);
     }
 
     /**

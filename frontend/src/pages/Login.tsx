@@ -3,9 +3,7 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '@components/auth/useAuth'
-
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL ?? 'http://api.10.108.143.255.nip.io'
+import { API_BASE_URL } from '../lib/api'
 
 type LoginPayload = {
   email: string

@@ -1,57 +1,62 @@
-// Standard 8-ball rack: triangle at 3/4 of table length, apex ball at top.
-// Coordinates normalized [0,1]. Origin top-left, x=horizontal, y=vertical.
-// Table ratio 2:1 (width:height). Ball radius ~0.03 in normalized space.
-//
-// Row layout (front to back, apex first):
-//   Row 1: ball 1  (apex)
-//   Row 2: balls 2, 3
-//   Row 3: balls 4, 8, 5   (eight ball in center)
-//   Row 4: balls 6, 14, 10, 11
-//   Row 5: balls 12, 7, 3*, 13, 15  (* already used: corrected below)
-//
-// Standard rack order (WPA rules): 1 at apex, 8 in center, corners = one solid + one stripe.
-// Exact ball placement per row:
-//   Row 1: [1]
-//   Row 2: [2, 9]
-//   Row 3: [3, 8, 10]
-//   Row 4: [4, 14, 11, 7]
-//   Row 5: [12, 6, 5, 13, 15]
-
-const RACK_X = 0.75;
-const CUE_BALL_X = 0.25;
-const CENTER_Y = 0.5;
-
-// Spacing between ball centers (normalized). Balls touch: radius ~0.028 each side.
-const DX = 0.056;
-const DY = 0.032;
+// Normalized positions derived from frontend GameTestStage.
+// Origin: top-left of playable cloth, normalized in [0, 1].
+// These values must stay aligned with the frontend truth table geometry.
 
 type RackPosition = { number: number; x: number; y: number };
 
-export const RACK_POSITIONS: RackPosition[] = [
-    // Row 1
-    { number: 1, x: RACK_X, y: CENTER_Y },
-    // Row 2
-    { number: 2, x: RACK_X + DX, y: CENTER_Y - DY },
-    { number: 9, x: RACK_X + DX, y: CENTER_Y + DY },
-    // Row 3
-    { number: 3, x: RACK_X + 2 * DX, y: CENTER_Y - 2 * DY },
-    { number: 8, x: RACK_X + 2 * DX, y: CENTER_Y },
-    { number: 10, x: RACK_X + 2 * DX, y: CENTER_Y + 2 * DY },
-    // Row 4
-    { number: 4, x: RACK_X + 3 * DX, y: CENTER_Y - 3 * DY },
-    { number: 14, x: RACK_X + 3 * DX, y: CENTER_Y - DY },
-    { number: 11, x: RACK_X + 3 * DX, y: CENTER_Y + DY },
-    { number: 7, x: RACK_X + 3 * DX, y: CENTER_Y + 3 * DY },
-    // Row 5
-    { number: 12, x: RACK_X + 4 * DX, y: CENTER_Y - 4 * DY },
-    { number: 6, x: RACK_X + 4 * DX, y: CENTER_Y - 2 * DY },
-    { number: 5, x: RACK_X + 4 * DX, y: CENTER_Y },
-    { number: 13, x: RACK_X + 4 * DX, y: CENTER_Y + 2 * DY },
-    { number: 15, x: RACK_X + 4 * DX, y: CENTER_Y + 4 * DY },
-];
+const TABLE = {
+    playWidth: 584,
+    playHeight: 996,
+    cueSpawn: {
+        x: 380,
+        y: 930,
+    },
+};
+
+const BALL_LAYOUT = [1, 10, 2, 12, 8, 3, 14, 4, 9, 5, 13, 6, 15, 7, 11];
+const BALL_DIAMETER = 44;
+const RACK_SPACING = BALL_DIAMETER + 2;
+const RACK_CENTER_X = 380;
+const RACK_APEX_Y = 112 + 996 * 0.4;
+
+function normalizeX(x: number) {
+    return x / TABLE.playWidth;
+}
+
+function normalizeY(y: number) {
+    return (y - 112) / TABLE.playHeight;
+}
+
+function getInitialRackCoordinates() {
+    const positions: Array<{ x: number; y: number }> = [];
+
+    for (let row = 0; row < 5; row += 1) {
+        const y = RACK_APEX_Y - row * (RACK_SPACING * 0.92);
+        const startX = RACK_CENTER_X - (row * RACK_SPACING) / 2;
+
+        for (let column = 0; column <= row; column += 1) {
+            positions.push({
+                x: startX + column * RACK_SPACING,
+                y,
+            });
+        }
+    }
+
+    return positions;
+}
+
+export const RACK_POSITIONS: RackPosition[] = BALL_LAYOUT.map((number, index) => {
+    const position = getInitialRackCoordinates()[index];
+
+    return {
+        number,
+        x: normalizeX(position.x - 88),
+        y: normalizeY(position.y),
+    };
+});
 
 export const CUE_BALL_SPAWN: RackPosition = {
     number: 0,
-    x: CUE_BALL_X,
-    y: CENTER_Y,
+    x: normalizeX(TABLE.cueSpawn.x - 88),
+    y: normalizeY(TABLE.cueSpawn.y),
 };

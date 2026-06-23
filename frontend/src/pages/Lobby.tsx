@@ -1,8 +1,6 @@
 import { useEffect, useEffectEvent, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL ?? 'http://api.10.108.143.255.nip.io'
+import { API_BASE_URL } from '../lib/api'
 
 type Player = {
   id: string

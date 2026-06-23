@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { BallType } from '../../generated/prisma/client';
+import { BallType, GameStatus } from '../../generated/prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CUE_BALL_SPAWN } from '../constants/rack-positions';
 import { ShootDto } from '../dto/shoot.dto';
@@ -35,10 +35,25 @@ export class ShotService {
      * @returns opponentId and shot params to forward
      */
     async processShoot(gameId: string, shooterId: string, dto: ShootDto): Promise<ProcessShootResult> {
-        const gamePlayers = await this.prisma.gamePlayer.findMany({
-            where: { gameId },
-            select: { playerId: true, isTurn: true },
+        const game = await this.prisma.game.findUnique({
+            where: { id: gameId },
+            select: {
+                status: true,
+                gamePlayers: {
+                    select: { playerId: true, isTurn: true },
+                },
+            },
         });
+
+        if (!game) {
+            throw new Error('GAME_NOT_FOUND');
+        }
+
+        if (game.status !== GameStatus.ONGOING) {
+            throw new Error('GAME_NOT_ONGOING');
+        }
+
+        const gamePlayers = game.gamePlayers;
 
         const shooter = gamePlayers.find((gp) => gp.playerId === shooterId);
         if (!shooter?.isTurn) {
@@ -101,6 +116,10 @@ export class ShotService {
             opponent.playerId,
             dto.pocketedNumbers,
             isFoul,
+            alreadyAssigned
+                ? shooter.ballType
+                : null,
+            ballTypesAssigned,
         );
 
         const remainingBallNumbers = gameBalls
@@ -112,6 +131,13 @@ export class ShotService {
                 ? (ballTypesAssigned.solids === shooterId ? BallType.SOLIDS : BallType.STRIPES)
                 : shooter.ballType;
 
+        const finalPositions = isFoul
+            ? [
+                ...dto.finalPositions.filter((p) => p.number !== 0),
+                { number: 0, x: CUE_BALL_SPAWN.x, y: CUE_BALL_SPAWN.y },
+            ]
+            : dto.finalPositions;
+
         const gameOver = this.gameRules.isGameOver(
             shooterId,
             opponent.playerId,
@@ -120,21 +146,14 @@ export class ShotService {
             remainingBallNumbers,
         );
 
-        // correct cue ball position silently on foul
-        const finalPositions = isFoul
-            ? [
-                ...dto.finalPositions.filter((p) => p.number !== 0),
-                { number: 0, x: CUE_BALL_SPAWN.x, y: CUE_BALL_SPAWN.y },
-            ]
-            : dto.finalPositions;
-
         await this.persist(
             gameId,
             shooter.id,
             shooterId,
             opponent.id,
             opponent.playerId,
-            dto,
+            dto.pocketedNumbers,
+            finalPositions,
             nextTurnPlayerId,
             ballTypesAssigned,
             isFoul,
@@ -158,13 +177,14 @@ export class ShotService {
         shooterId: string,
         opponentGamePlayerId: string,
         opponentId: string,
-        dto: ShotResolvedDto,
+        pocketedNumbers: number[],
+        finalPositions: ShotResolvedDto['finalPositions'],
         nextTurnPlayerId: string,
         ballTypesAssigned: BallTypesAssigned,
         isFoul: boolean,
         gameOver: GameOverPayload | null,
     ): Promise<void> {
-        const pocketedUpdates = dto.pocketedNumbers
+        const pocketedUpdates = pocketedNumbers
             .filter((n) => n !== 0 || !isFoul)
             .map((number) =>
                 this.prisma.gameBall.updateMany({
@@ -173,10 +193,10 @@ export class ShotService {
                 }),
             );
 
-        const positionUpdates = dto.finalPositions.map((pos) =>
+        const positionUpdates = finalPositions.map((pos) =>
             this.prisma.gameBall.updateMany({
                 where: { gameId, ball: { number: pos.number } },
-                data: { x: pos.x, y: pos.y },
+                data: { x: pos.x, y: pos.y, isPocketed: false },
             }),
         );
 

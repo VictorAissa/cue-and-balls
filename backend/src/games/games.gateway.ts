@@ -17,7 +17,7 @@ import { ShotResolvedDto } from './dto/shot-resolved.dto';
 import { GamesService } from './services/games.service';
 import { ShotService } from './services/shot.service';
 
-const RECONNECTION_TTL_MS = 30_000;
+const RECONNECTION_TTL_MS = 90_000;
 
 type AuthenticatedSocket = Socket & { playerId: string; gameId: string };
 
@@ -72,6 +72,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
             // game_started is emitted when both players are in the room
             const sockets = await this.server.in(gameId).fetchSockets();
             if (sockets.length === 2) {
+                this.gamesService.clearWebsocketStartTimeout(gameId);
                 const turnPlayer = gameState.gamePlayers.find((gp) => gp.isTurn);
                 this.server.to(gameId).emit('game_started', {
                     firstTurnPlayerId: turnPlayer?.player.id ?? gameState.gamePlayers[0].player.id,
@@ -89,10 +90,19 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         const { playerId, gameId } = client as AuthenticatedSocket;
         if (!playerId || !gameId) return;
 
+        const status = await this.gamesService.getGameStatus(gameId);
+        if (!status || !['WAITING', 'ONGOING', 'PAUSED'].includes(status)) {
+            return;
+        }
+
         this.server.to(gameId).emit('player_left', { playerId });
 
         const timer = setTimeout(async () => {
             this.reconnectionTimers.delete(playerId);
+            const latestStatus = await this.gamesService.getGameStatus(gameId);
+            if (!latestStatus || !['WAITING', 'ONGOING', 'PAUSED'].includes(latestStatus)) {
+                return;
+            }
             const opponent = await this.gamesService.findOpponent(gameId, playerId);
             if (opponent) {
                 this.server.to(gameId).emit('game_over', { winnerId: opponent.playerId, reason: 'OPPONENT_DISCONNECTED' });
@@ -110,9 +120,31 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     ): Promise<void> {
         try {
             const { playerId, gameId } = client;
+            console.log('[GameGateway] shoot received', { playerId, gameId, dto });
             const { shotParams } = await this.shotService.processShoot(gameId, playerId, dto);
-            this.server.to(gameId).except(client.id).emit('opponent_shot', shotParams);
+            const sockets = await this.server.in(gameId).fetchSockets();
+
+            console.log('[GameGateway] opponent_shot broadcast', {
+                playerId,
+                gameId,
+                socketIds: sockets.map((socket) => socket.id),
+                recipientSocketIds: sockets
+                    .filter((socket) => socket.id !== client.id)
+                    .map((socket) => socket.id),
+                shotParams,
+            });
+
+            sockets
+                .filter((socket) => socket.id !== client.id)
+                .forEach((socket) => {
+                    socket.emit('opponent_shot', shotParams);
+                });
         } catch (err) {
+            console.log('[GameGateway] shoot rejected', {
+                playerId: client.playerId,
+                gameId: client.gameId,
+                error: err instanceof Error ? err.message : 'Internal error',
+            });
             const code = err instanceof Error && err.message in WsErrorCode
                 ? err.message as WsErrorCode
                 : WsErrorCode.INTERNAL_ERROR;
@@ -127,7 +159,15 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     ): Promise<void> {
         try {
             const { playerId, gameId } = client;
+            console.log('[GameGateway] shot_resolved received', { playerId, gameId, dto });
             const { shotResult, gameOver } = await this.shotService.processShotResolved(gameId, playerId, dto);
+
+            console.log('[GameGateway] shot_result broadcast', {
+                playerId,
+                gameId,
+                shotResult,
+                gameOver,
+            });
 
             this.server.to(gameId).emit('shot_result', shotResult);
 
@@ -168,6 +208,11 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     async handleLeaveGame(@ConnectedSocket() client: AuthenticatedSocket): Promise<void> {
         try {
             const { playerId, gameId } = client;
+            const pending = this.reconnectionTimers.get(playerId);
+            if (pending) {
+                clearTimeout(pending);
+                this.reconnectionTimers.delete(playerId);
+            }
             const opponent = await this.gamesService.findOpponent(gameId, playerId);
             await this.gamesService.abandonGame(gameId);
             if (opponent) {
