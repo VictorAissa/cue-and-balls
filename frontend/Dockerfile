@@ -8,7 +8,8 @@ RUN npm ci
 
 COPY . .
 
-ENV VITE_API_URL=/api
+ENV VITE_API_BASE_URL=/api
+ENV VITE_SOCKET_BASE_URL=/
 
 RUN npm run build
 
