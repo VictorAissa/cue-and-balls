@@ -223,5 +223,5 @@ kubectl get pods -n pool
 kubectl get gateway,httproute -n pool
 
 printf '\n%sDeployment complete.%s\n' "${C_GREEN}" "${C_RESET}"
-printf '  Frontend : http://web.%s.nip.io\n' "${DOMAIN}"
-printf '  Backend  : http://api.%s.nip.io/api\n' "${DOMAIN}"sudo
+printf '  Frontend : http://web.%s\n' "${DOMAIN}"
+printf '  Backend  : http://api.%s/api\n' "${DOMAIN}"
