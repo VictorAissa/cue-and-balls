@@ -122,7 +122,7 @@ kubectl get svc traefik -n traefik
 
 Note the value in the `EXTERNAL-IP` column (e.g. `10.101.159.91`).
 
-Set `GATEWAY_IP` in `cluster/k8s/.env.local` to this value, then render and apply the HTTPRoute templates :
+Set `DOMAIN` in `cluster/k8s/.env.local` to "<EXTERNAL-IP>.nip.io", then render and apply the HTTPRoute templates:
 
 ```bash
 source cluster/k8s/.env.local
