@@ -339,7 +339,8 @@ components:
       summary: |
         Sent to both players when Player B connects via WebSocket (Player A already connected).
         This is the signal to unlock the game UI and begin the first turn.
-        Contains both players so each client can identify their opponent.
+        Contains both players and the full table state so each client can identify
+        their opponent and hydrate the same rack before the first turn.
       payload:
         type: object
         properties:
@@ -355,10 +356,9 @@ components:
             maxItems: 2
           gameBalls:
             type: array
-            description: Initial ball positions — allows Player A to render the table without a REST call
+            description: Full table state at game start
             items:
               $ref: "#/components/schemas/GameBall"
-            minItems: 16
             maxItems: 16
         required: [firstTurnPlayerId, players, gameBalls]
 
