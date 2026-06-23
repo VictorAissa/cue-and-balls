@@ -130,14 +130,6 @@ envsubst < backend/deploy/k8s/httproute.yaml | kubectl apply -f -
 envsubst < frontend/deploy/k8s/httproute.yaml | kubectl apply -f -
 ```
 
-> On Azure, the gateway IP is static — see `cluster/k8s/.env.azure`, set once and never changed across `terraform destroy` / `apply` cycles.
-
-> **What is nip.io ?**
-> nip.io is a wildcard DNS service that resolves any hostname of the form `<anything>.<IP>.nip.io`
-> directly to `<IP>`, with no DNS configuration required. This lets us use proper hostnames locally
-> without editing `/etc/hosts`. The IP here is the one assigned by `minikube tunnel` to the Traefik
-> LoadBalancer — it is stable as long as the Traefik Helm release exists, but changes on full reinstall.
-
 ---
 
 ## Setup secrets
@@ -278,19 +270,6 @@ sudo pacman -S terraform
 ```bash
 # Verify
 terraform version
-```
-
-### kubelogin (optional)
-Only needed for non-interactive auth (CI/CD, service principal). Not required
-for everyday interactive use — AKS clusters on Kubernetes 1.24+ use the
-kubelogin exec-plugin format automatically via Azure CLI login.
-```bash
-# AUR
-yay -S kubelogin-bin
-```
-```bash
-# Verify
-kubelogin --version
 ```
 
 ---
