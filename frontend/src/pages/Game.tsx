@@ -10,6 +10,7 @@ import type {
   GameStageHandle,
   Player,
   PlayerLeftPayload,
+  PlayerRejoinedPayload,
   RoomJoinedPayload,
   ShotPayload,
   ShotResolvedPayload,
@@ -74,7 +75,9 @@ export default function Game() {
       auth: {
         token: `Bearer ${token}`,
       },
-      transports: ['websocket'],
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      timeout: 10000,
     })
 
     socketRef.current = socket
@@ -105,6 +108,8 @@ export default function Game() {
     }
 
     socket.on('connect', () => {
+      console.log('[Game] socket connect', { socketId: socket.id })
+
       if (isCancelled) {
         return
       }
@@ -114,7 +119,9 @@ export default function Game() {
       void hydrateFromServer()
     })
 
-    socket.on('disconnect', () => {
+    socket.on('disconnect', (reason) => {
+      console.log('[Game] socket disconnect', { reason })
+
       if (!isCancelled) {
         setIsSocketConnected(false)
         setIsSimulationRunning(false)
@@ -122,10 +129,27 @@ export default function Game() {
     })
 
     socket.on('connect_error', (connectError: Error) => {
+      console.log('[Game] socket connect_error', {
+        message: connectError.message,
+      })
+
       if (!isCancelled) {
-        setError(connectError.message)
         setIsLoading(false)
       }
+    })
+
+    socket.io.on('reconnect_attempt', (attempt) => {
+      console.log('[Game] socket reconnect_attempt', { attempt })
+    })
+
+    socket.io.on('reconnect', (attempt) => {
+      console.log('[Game] socket reconnect', { attempt, socketId: socket.id })
+    })
+
+    socket.io.on('reconnect_error', (reconnectError: Error) => {
+      console.log('[Game] socket reconnect_error', {
+        message: reconnectError.message,
+      })
     })
 
     socket.on('room_joined', (payload: RoomJoinedPayload) => {
@@ -266,6 +290,16 @@ export default function Game() {
       setDisconnectedPlayerId(payload.playerId)
     })
 
+    socket.on('player_rejoined', (payload: PlayerRejoinedPayload) => {
+      if (isCancelled) {
+        return
+      }
+
+      setDisconnectedPlayerId((current) =>
+        current === payload.playerId ? null : current,
+      )
+    })
+
     socket.on('game_over', (payload: GameOverPayload) => {
       if (isCancelled) {
         return
@@ -292,8 +326,10 @@ export default function Game() {
     })
 
     socket.on('error', (payload: ApiErrorPayload) => {
+      console.log('[Game] socket error', payload)
+
       if (!isCancelled) {
-        setError(payload.message ?? 'Une erreur WebSocket est survenue.')
+        setIsLoading(false)
       }
     })
 
@@ -391,6 +427,12 @@ export default function Game() {
                   {isSocketConnected ? 'Connecté' : 'Connexion...'}
                 </span>
 
+                {isLoading && (
+                  <div className="game-inline-notice">
+                    Chargement de la partie.
+                  </div>
+                )}
+
                 {gameDetail?.game.status === 'WAITING' && !isLoading && (
                   <div className="game-inline-notice">
                     En attente du deuxieme joueur.
@@ -400,6 +442,12 @@ export default function Game() {
                 {disconnectedPlayerId && !gameOverCopy && (
                   <div className="game-inline-notice">
                     Reconnexion adverse en attente.
+                  </div>
+                )}
+
+                {gameOverCopy && (
+                  <div className="game-inline-notice">
+                    {gameOverCopy.winnerName} remporte la table. {gameOverCopy.reasonLabel}.
                   </div>
                 )}
 
@@ -432,57 +480,6 @@ export default function Game() {
               />
             </div>
           </div>
-
-          {(isLoading || disconnectedPlayerId || gameOverCopy) && (
-            <div className="game-modal-backdrop">
-              <div className="game-modal">
-                <span className="app-kicker">Partie</span>
-                <h2 className="mt-4 text-2xl font-black tracking-tight text-zinc-900">
-                  {gameOverCopy
-                    ? 'Partie terminee'
-                    : disconnectedPlayerId
-                      ? 'Reconnexion en attente'
-                      : 'En attente des deux joueurs'}
-                </h2>
-
-                <p className="mt-3 text-sm leading-6 text-zinc-700 sm:text-base">
-                  {gameOverCopy
-                    ? `${gameOverCopy.winnerName} remporte la table. ${gameOverCopy.reasonLabel}.`
-                    : disconnectedPlayerId
-                      ? 'Le serveur conserve la partie. L adversaire peut reprendre via REST puis WebSocket.'
-                      : isLoading
-                        ? 'Chargement de la room et de l etat persiste.'
-                        : 'La table se debloquera quand les deux joueurs seront connectes a la meme room.'}
-                </p>
-
-                <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                  <div className="game-status-card">
-                    <p className="text-xs font-bold uppercase tracking-[0.18em] text-amber-900">
-                      Joueurs
-                    </p>
-                    <p className="mt-2 text-2xl font-black text-zinc-900">
-                      {players.length}/2
-                    </p>
-                  </div>
-
-                  <div className="game-status-card">
-                    <p className="text-xs font-bold uppercase tracking-[0.18em] text-amber-900">
-                      Etat
-                    </p>
-                    <p className="mt-2 text-2xl font-black text-zinc-900">
-                      {gameDetail?.game.status ?? 'WAITING'}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="game-status-line mt-4">
-                  <span className={`status-pill ${isSocketConnected ? 'success' : 'pending'}`}>
-                    {isSocketConnected ? 'Connecte' : 'Connexion'}
-                  </span>
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       </section>
     </main>
