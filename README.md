@@ -244,7 +244,43 @@ That version bump is what drives image updates on the cluster: with an `IfNotPre
 pull policy, reusing the same tag has no effect, so a new version must be published to
 roll out a new image.
 
-<!-- TODO: insert CI/CD workflow sequence diagram here -->
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Dev as Développeur
+    participant GH as GitHub (Dépôt)
+    participant CI as GitHub Actions
+    participant GHCR as GHCR (Registre)
+    participant K8s as Cluster Kubernetes (AKS/Local)
+
+    Dev->>Dev: Bump manuel de la version (package.json)
+    Dev->>GH: Push sur la branche (git push)
+    GH->>CI: Déclenchement du workflow au push
+
+    rect rgb(240, 248, 255)
+        note right of CI: Phase de Tests
+        CI->>CI: Exécution de 'npm test' (Front & Back)
+    end
+
+    rect rgb(240, 255, 240)
+        note right of CI: Build & Push
+        CI->>CI: Récupération de la version (package.json)
+        CI->>CI: Build des images Docker (Front & Back)
+        CI->>GHCR: Push des images avec le nouveau tag (semver)
+    end
+
+    Dev->>Dev: Mise à jour du tag dans .env (BACKEND_IMAGE / FRONTEND_IMAGE)
+    Dev->>K8s: Déploiement (envsubst < deployment.yaml | kubectl apply)
+
+    rect rgb(255, 240, 245)
+        note right of K8s: Rolling Update
+        K8s->>K8s: Détection d'un nouveau tag dans le Deployment
+        K8s->>GHCR: Pull des nouvelles images (pull policy: IfNotPresent)
+        K8s->>K8s: Lancement des nouveaux pods
+        K8s->>K8s: Terminaison gracieuse des anciens pods
+    end
+
+```
 
 ## Limitations and next steps
 
