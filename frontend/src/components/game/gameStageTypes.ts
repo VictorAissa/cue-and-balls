@@ -88,6 +88,10 @@ export type PlayerLeftPayload = {
   playerId: string
 }
 
+export type PlayerRejoinedPayload = {
+  playerId: string
+}
+
 export type GameOverReason =
   | 'EIGHT_BALL_POCKETED'
   | 'FOUL_ON_EIGHT'

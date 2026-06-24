@@ -21,7 +21,12 @@ const RECONNECTION_TTL_MS = 90_000;
 
 type AuthenticatedSocket = Socket & { playerId: string; gameId: string };
 
-@WebSocketGateway({ namespace: '/game', cors: { origin: '*' } })
+@WebSocketGateway({
+    namespace: '/game',
+    cors: { origin: '*' },
+    pingInterval: 15000,
+    pingTimeout: 10000,
+})
 @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
 export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @WebSocketServer()
@@ -62,22 +67,27 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
             // cancel pending reconnection timer if any
             const pending = this.reconnectionTimers.get(playerId);
+            const isReconnection = Boolean(pending);
             if (pending) {
                 clearTimeout(pending);
                 this.reconnectionTimers.delete(playerId);
             }
 
             client.emit('room_joined', gameState);
+            if (isReconnection) {
+                client.to(gameId).emit('player_rejoined', { playerId });
+            }
 
             // Start the match when two distinct players are actually connected to the room.
             const connectedPlayerIds = await this.getConnectedPlayerIds(gameId);
             if (gameState.game.status === 'WAITING' && connectedPlayerIds.size === 2) {
                 await this.gamesService.startGame(gameId);
-                const turnPlayer = gameState.gamePlayers.find((gp) => gp.isTurn);
+                const startedGameState = await this.gamesService.getGame(gameId);
+                const turnPlayer = startedGameState.gamePlayers.find((gp) => gp.isTurn);
                 this.server.to(gameId).emit('game_started', {
-                    firstTurnPlayerId: turnPlayer?.player.id ?? gameState.gamePlayers[0].player.id,
-                    players: gameState.gamePlayers,
-                    gameBalls: gameState.gameBalls,
+                    firstTurnPlayerId: turnPlayer?.player.id ?? startedGameState.gamePlayers[0].player.id,
+                    players: startedGameState.gamePlayers,
+                    gameBalls: startedGameState.gameBalls,
                 });
             }
         } catch {

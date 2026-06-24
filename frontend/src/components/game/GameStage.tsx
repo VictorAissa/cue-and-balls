@@ -11,6 +11,7 @@ import {
 import {
   forwardRef,
   useEffect,
+  useLayoutEffect,
   useImperativeHandle,
   useRef,
 } from 'react'
@@ -414,7 +415,7 @@ export default forwardRef<GameStageHandle, GameStageProps>(function GameStage(
     [],
   )
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     authoritativeBallsRef.current = authoritativeBalls
     pendingAuthoritativeStateRef.current = authoritativeBalls
     methodsRef.current.applyAuthoritativeState(authoritativeBalls)
