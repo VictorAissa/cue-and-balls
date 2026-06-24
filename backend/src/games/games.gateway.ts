@@ -17,9 +17,10 @@ import { ShotResolvedDto } from './dto/shot-resolved.dto';
 import { GamesService } from './services/games.service';
 import { ShotService } from './services/shot.service';
 
-const RECONNECTION_TTL_MS = 90_000;
+const RECONNECTION_TTL_MS = 150_000;
 
-type AuthenticatedSocket = Socket & { playerId: string; gameId: string };
+type SocketData = { playerId?: string; gameId?: string };
+type AuthenticatedSocket = Socket<any, any, any, SocketData>;
 
 @WebSocketGateway({
     namespace: '/game',
@@ -43,7 +44,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         private readonly shotService: ShotService,
     ) {}
 
-    async handleConnection(client: Socket): Promise<void> {
+    async handleConnection(client: AuthenticatedSocket): Promise<void> {
         try {
             const token = this.extractToken(client);
             const payload = await this.jwtService.verifyAsync<{ sub: string }>(token, {
@@ -60,26 +61,25 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
             }
 
             const gameId = gameState.game.id;
-            (client as AuthenticatedSocket).playerId = playerId;
-            (client as AuthenticatedSocket).gameId = gameId;
+            client.data.playerId = playerId;
+            client.data.gameId = gameId;
 
             await client.join(gameId);
 
             // cancel pending reconnection timer if any
             const pending = this.reconnectionTimers.get(playerId);
-            const isReconnection = Boolean(pending);
             if (pending) {
                 clearTimeout(pending);
                 this.reconnectionTimers.delete(playerId);
             }
 
             client.emit('room_joined', gameState);
-            if (isReconnection) {
+            const connectedPlayerIds = await this.getConnectedPlayerIds(gameId);
+            if (connectedPlayerIds.size > 1) {
                 client.to(gameId).emit('player_rejoined', { playerId });
             }
 
             // Start the match when two distinct players are actually connected to the room.
-            const connectedPlayerIds = await this.getConnectedPlayerIds(gameId);
             if (gameState.game.status === 'WAITING' && connectedPlayerIds.size === 2) {
                 await this.gamesService.startGame(gameId);
                 const startedGameState = await this.gamesService.getGame(gameId);
@@ -96,8 +96,8 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         }
     }
 
-    async handleDisconnect(client: Socket): Promise<void> {
-        const { playerId, gameId } = client as AuthenticatedSocket;
+    async handleDisconnect(client: AuthenticatedSocket): Promise<void> {
+        const { playerId, gameId } = client.data;
         if (!playerId || !gameId) return;
 
         const status = await this.gamesService.getGameStatus(gameId);
@@ -111,6 +111,11 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         }
 
         this.server.to(gameId).emit('player_left', { playerId });
+
+        const existingTimer = this.reconnectionTimers.get(playerId);
+        if (existingTimer) {
+            clearTimeout(existingTimer);
+        }
 
         const timer = setTimeout(async () => {
             this.reconnectionTimers.delete(playerId);
@@ -137,8 +142,14 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         @ConnectedSocket() client: AuthenticatedSocket,
         @MessageBody() dto: ShootDto,
     ): Promise<void> {
+        const auth = this.getAuthContext(client);
+        if (!auth) {
+            client.emit('error', { code: WsErrorCode.UNAUTHORIZED, message: 'Unauthorized' });
+            return;
+        }
+
         try {
-            const { playerId, gameId } = client;
+            const { playerId, gameId } = auth;
             console.log('[GameGateway] shoot received', { playerId, gameId, dto });
             const { shotParams } = await this.shotService.processShoot(gameId, playerId, dto);
             const sockets = await this.server.in(gameId).fetchSockets();
@@ -160,8 +171,8 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
                 });
         } catch (err) {
             console.log('[GameGateway] shoot rejected', {
-                playerId: client.playerId,
-                gameId: client.gameId,
+                playerId: client.data.playerId,
+                gameId: client.data.gameId,
                 error: err instanceof Error ? err.message : 'Internal error',
             });
             const code = err instanceof Error && err.message in WsErrorCode
@@ -176,8 +187,14 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         @ConnectedSocket() client: AuthenticatedSocket,
         @MessageBody() dto: ShotResolvedDto,
     ): Promise<void> {
+        const auth = this.getAuthContext(client);
+        if (!auth) {
+            client.emit('error', { code: WsErrorCode.UNAUTHORIZED, message: 'Unauthorized' });
+            return;
+        }
+
         try {
-            const { playerId, gameId } = client;
+            const { playerId, gameId } = auth;
             console.log('[GameGateway] shot_resolved received', { playerId, gameId, dto });
             const { shotResult, gameOver } = await this.shotService.processShotResolved(gameId, playerId, dto);
 
@@ -203,8 +220,14 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     @SubscribeMessage('pause_request')
     async handlePauseRequest(@ConnectedSocket() client: AuthenticatedSocket): Promise<void> {
+        const auth = this.getAuthContext(client);
+        if (!auth) {
+            client.emit('error', { code: WsErrorCode.UNAUTHORIZED, message: 'Unauthorized' });
+            return;
+        }
+
         try {
-            const { playerId, gameId } = client;
+            const { playerId, gameId } = auth;
             const result = await this.gamesService.pauseGame(gameId, playerId);
             this.server.to(gameId).emit('game_paused', result);
         } catch {
@@ -214,8 +237,14 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     @SubscribeMessage('resume_request')
     async handleResumeRequest(@ConnectedSocket() client: AuthenticatedSocket): Promise<void> {
+        const auth = this.getAuthContext(client);
+        if (!auth) {
+            client.emit('error', { code: WsErrorCode.UNAUTHORIZED, message: 'Unauthorized' });
+            return;
+        }
+
         try {
-            const { gameId } = client;
+            const { gameId } = auth;
             await this.gamesService.resumeGame(gameId);
             this.server.to(gameId).emit('game_resumed', {});
         } catch {
@@ -225,8 +254,14 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     @SubscribeMessage('leave_game')
     async handleLeaveGame(@ConnectedSocket() client: AuthenticatedSocket): Promise<void> {
+        const auth = this.getAuthContext(client);
+        if (!auth) {
+            client.emit('error', { code: WsErrorCode.UNAUTHORIZED, message: 'Unauthorized' });
+            return;
+        }
+
         try {
-            const { playerId, gameId } = client;
+            const { playerId, gameId } = auth;
             const pending = this.reconnectionTimers.get(playerId);
             if (pending) {
                 clearTimeout(pending);
@@ -248,16 +283,25 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         return raw.replace(/^Bearer\s+/i, '');
     }
 
+    private getAuthContext(client: AuthenticatedSocket): { playerId: string; gameId: string } | null {
+        const { playerId, gameId } = client.data;
+        if (!playerId || !gameId) {
+            return null;
+        }
+
+        return { playerId, gameId };
+    }
+
     private async findOpponentSocket(gameId: string, playerId: string): Promise<Socket | undefined> {
         const sockets = await this.server.in(gameId).fetchSockets();
-        return sockets.find((s) => (s as unknown as AuthenticatedSocket).playerId !== playerId) as Socket | undefined;
+        return sockets.find((socket) => socket.data.playerId !== playerId) as Socket | undefined;
     }
 
     private async getConnectedPlayerIds(gameId: string): Promise<Set<string>> {
         const sockets = await this.server.in(gameId).fetchSockets();
         return new Set(
             sockets
-                .map((socket) => (socket as unknown as AuthenticatedSocket).playerId)
+                .map((socket) => socket.data.playerId)
                 .filter((playerId): playerId is string => Boolean(playerId)),
         );
     }

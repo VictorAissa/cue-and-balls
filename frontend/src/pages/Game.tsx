@@ -75,6 +75,8 @@ export default function Game() {
       auth: {
         token: `Bearer ${token}`,
       },
+      closeOnBeforeunload: true,
+      transports: ['websocket'],
       reconnection: true,
       reconnectionAttempts: Infinity,
       timeout: 10000,
