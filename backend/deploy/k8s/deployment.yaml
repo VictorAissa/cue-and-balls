@@ -4,7 +4,6 @@ metadata:
   name: backend
   namespace: pool
 spec:
-  replicas: 2
   selector:
     matchLabels:
       app: backend
@@ -45,5 +44,6 @@ spec:
               memory: 128Mi
               ephemeral-storage: 128Mi
             limits:
+              cpu: 500m
               memory: 256Mi
               ephemeral-storage: 256Mi

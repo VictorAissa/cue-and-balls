@@ -4,7 +4,6 @@ metadata:
   name: frontend
   namespace: pool
 spec:
-  replicas: 1
   selector:
     matchLabels:
       app: frontend
@@ -28,5 +27,6 @@ spec:
               memory: 64Mi
               ephemeral-storage: 64Mi
             limits:
+              cpu: 200m
               memory: 128Mi
               ephemeral-storage: 128Mi
